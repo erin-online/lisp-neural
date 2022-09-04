@@ -27,11 +27,11 @@
                                         ; Finally, norm-function is called on the result of outer-function. This produces the number for the node.
    (norm-function :initarg :norm-function :initform #'relu :accessor norm-function
                   :documentation "Normalizing function such as ReLU, applied to the final value of outer-function.")
-   (outer-function :initarg :outer-function :initform `(+ node bias) :accessor outer-function
+   (outer-function :initarg :outer-function :initform (lambda (node-value bias) (+ node-value bias)) :accessor outer-function
                    :documentation "Function applied to the node as a whole, not to individual weights. Example is adding bias.")
    (connecting-function :initarg :connecting-function :initform #'+ :accessor connecting-function
                         :documentation "Function that binds every inner-function together. Should be commutative f(b, a) = f(a, b), so * and + are good fits.")
-   (inner-function :initarg :inner-function :initform `(* (elt weights 0) prev-node) :accessor inner-function
+   (inner-function :initarg :inner-function :initform (lambda (prev-node weights) (* prev-node (elt weights 0))) :accessor inner-function
                    :documentation "Function called on every prev-node value. Uses weights.")))
 
 (defgeneric activate-node (node prev-nodes)
@@ -39,14 +39,23 @@
 
 (defmethod activate-node ((node node) prev-nodes)
                                         ; call inner-function on each prev-node
-  (let ((inner-function-results (make-array prev-node-count :fill-pointer 0)))
+  (let ((inner-function-results (make-array (prev-node-count node) :fill-pointer 0)) (bias (elt (outer-params node) 0)))
     (dotimes (prev-node-counter (prev-node-count node))
-      (let ((weights (slice-2d-array (weights node) prev-node-counter)) (prev-node (elt prev-nodes prev-node-counter))
-            (vector-push (eval (inner-function node)) inner-function-results))))
-    (let ((connecting-function-result (reduce (connecting-function node) inner-function-results)))
-      (let ((outer-function-result (funcall outer-function connecting-function-result)))
-        (let ((norm-function-result (funcall norm-function outer-function-result)))
-          norm-function)))))
+      (let ((weights (slice-2d-array (weights node) prev-node-counter)) (prev-node (elt prev-nodes prev-node-counter)))
+        (vector-push (funcall (inner-function node) prev-node weights) inner-function-results))) ; push result to the inner-function-results vector
+    (let* ((connecting-function-result (reduce (connecting-function node) inner-function-results)) ; call connecting-function to reduce the inner function results
+           (outer-function-result (funcall (outer-function node) connecting-function-result bias))
+           (norm-function-result (funcall (norm-function node) outer-function-result)))
+      norm-function-result)))
+
+(defun activate-network (network input-nodes)
+  (let ((prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
+    (dotimes (layer-number (length network) current-nodes)
+      (setf nodes-in-layer (length (elt network layer-number)))
+      (setf current-nodes (make-array nodes-in-layer :fill-pointer 0))
+      (dotimes (node-number (length (elt network layer-number)))
+        (vector-push (activate-node (elt (elt network layer-number) node-number) prev-nodes) current-nodes))
+      (setf prev-nodes current-nodes))))
 
 (defun relu (input)
   "ReLU (rectified linear unit). Sets all nodes that would be negative to 0.
@@ -54,18 +63,6 @@ This is done because negative nodes are bad, apparently. Don't really know why,
 I think they seem cool. Probably don't need a separate function for this
 but it makes it easier to explain."
   (max 0 input))
-
-
-(defun activate-node (bias weights prev-nodes norm-function) 
-  "Assigns a value to a node ('neuron'). Returns a float that >= 0.
-Formula looks like norm-function(bias + weight1*prevnode1 + weight2*prevnode2 + ...)
-@bias The bias of the node. Starts at this value before any of the weights are added.
-@weights Vector with each of the node's weights.
-@prevnodes Vector with values of each of the nodes of the previous layer.
-@norm-function Normalizing function applied after adding up all the weights.
-ReLU is used for the normalizing function here."
-  (funcall norm-function 
-	   (+ bias (reduce #'+ (map 'vector #'* weights prev-nodes)))))
 
 (defun initialize-network-mono (sizes initializer)
   "Creates the network of nodes, sets every weight and bias according to the initializer.
