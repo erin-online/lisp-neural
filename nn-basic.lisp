@@ -5,7 +5,7 @@
 ; NOTE: This program requires the array-operations or aops package. Install it with (ql:quickload :array-operations), then do (in-package :array-operations) to get in.
 ;
 ; TO-DO:
-; 1. Node as an object, represent each layer as a list of nodes. Also, allow for the creation of multiple networks.
+;✓1. Node as an object, represent each layer as a list of nodes. Also, allow for the creation of multiple networks.
 ; 2. Create an alternative to activate-network that returns the list of activations for every layer, not just the last ones.
 ; 3. Finish backpropagation using the function from 2
 ; 4. Work on file I/O for image recognition using data from the MNIST database http://yann.lecun.com/exdb/mnist/. This will result in a basic functioning neural network.
@@ -90,7 +90,30 @@ The entire network is a list containing every layer.
 
 (defun generate-weights (initializer prev-node-count weights-per-prev-node)
   (aops:generate initializer (list prev-node-count weights-per-prev-node)))
-      
+
+(defun generate-derivative-table ()
+  (defparameter *derivative-table* (make-hash-table))
+  (add-derivatives
+   #'sin #'cos
+   #'cos (lambda (x) (* -1 (sin x)))
+   #'exp #'exp
+   #'log (lambda (x) (/ 1 x))
+   ))
+
+(defun get-derivative (function weight)
+  ; implementing this is next
+)
+
+(defun add-derivatives (&rest args)
+; Works like setf, taking an even number of arguments. Instead of setting A to B, it sets hash A to value B.
+  (dotimes (binding (/ (length args) 2))
+    (let ((func (elt args (* binding 2))) (deriv (elt args (+ (* binding 2) 1))))
+      (add-one-deriv func deriv))))
+
+(defmacro add-one-deriv (x y)
+  `(progn (setf (gethash ,x *derivative-table*) ,y)
+  (setf (gethash (get-function-name ,x) *derivative-table*) T)))
+
 (defun get-weights (layer node)
   "Returns the 1D vector of weights for a given node."
   (make-array (array-dimension (elt (elt *network* layer) 1) 1)
@@ -103,7 +126,13 @@ The entire network is a list containing every layer.
               :displaced-to array
               :displaced-index-offset (* index (array-dimension array 1))))
 
-(defun backpropagate (errors)
+(defun get-lambda-exp (func)
+  (elt (function-lambda-expression func) 2))
+
+(defun get-function-name (func)
+  (nth-value 2 (function-lambda-expression func)))
+
+(defun backpropagate (network errors)
   "Goes backwards through the network to find gradients for each weight and bias. Currently unfinished."
   (let ((layer-size 0) (prev-gradients errors) (current-gradients NIL))
     (dolist (layer-data (reverse *network*)) ;for each layer, starting at the end and going backwards. note that layer-data is the actual layer representation in *network*, not the cardinal or size
