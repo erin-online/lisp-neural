@@ -171,7 +171,10 @@ The entire network is a list containing every layer.
                                         ; If this is unintuitive and confusing, sorry. I couldn't think of a better word.
                                         ; The idea of recursive calls to this function is that we can eventually break down the larger atoms by splitting them into first-atom and rest-atoms,
                                         ; splitting something like (sin (cos x)) into sin and (cos x), then going down to (cos x).
-  
+  (if (equal (type-of func) 'symbol) ; See below, except if the variable is not in a list
+      (if (equal func x)
+          (return-from get-derivative 1)
+          (return-from get-derivative 0)))
   (if (equal (length func) 1) ; One atom is in the provided lambda expression. This is a variable. If it is not, someone else screwed up.
       (if (equal (elt func 0) x) ; Are we finding the derivative with respect to this variable?
           (return-from get-derivative 1) ; Return 1 if yes
@@ -181,7 +184,10 @@ The entire network is a list containing every layer.
                                         ; I don't know if I need second-atom so I'm keeping it around in comment form
         
         (rest-atoms ; The rest of the atoms. Everything except first-atom.
-          (if (and (eql (type-of (elt (remove-first func) 0)) 'cons) ; Condition 1: The second item in the func list is a cons cell (list).
+                                        ; This works but needs to be cleaned up. I commented out Condition 1 in order to let in symbols, to stop the (sin (x)) issue.
+                                        ; Assuming we are using this as a permanent fix (very possible), the comments need to be redone a bit.
+          
+          (if (and t ;eql (type-of (elt (remove-first func) 0)) 'cons) ; Condition 1: The second item in the func list is a cons cell (list).
                    (< (length func) 3)) ; Condition 2: There are only two items in the func list.
               (elt (remove-first func) 0) ; These conditions activate when the second atom is a nested function. Removing the first atom gives a nested list that we don't want.
                                         ; For example, (remove-first (sin (cos x)) will give us ((cos x)). This is silly and dumb. (elt (remove-first func 0)) gets rid of the outer layer.
@@ -195,7 +201,8 @@ The entire network is a list containing every layer.
             `(* (,(get-function-name first-deriv) ,rest-atoms) ; f'(g(x))
               ,(get-derivative rest-atoms x))))) ; g'(x)
     (if (equal first-atom '+) ; sum
-        (return-from get-derivative `(reduce #'+ ,(map 'list #'get-derivative rest-atoms (make-array (length rest-atoms) :initial-element x))))) ; This is still a little sketchy
+        (return-from get-derivative `(+ ,@(map 'list #'get-derivative rest-atoms                       ; Use ,@ to break the outer list so we can access the elements using the + function. Reduce doesn't work.
+                                               (make-array (length rest-atoms) :initial-element x))))) ; Call get-derivative on each rest-atom, so we need this array of xs to pass into map
     ; (if (equal first-atom '*) ; product rule
         ; )
     ))
@@ -203,8 +210,6 @@ The entire network is a list containing every layer.
 (defun product-rule (&rest atoms)
   ; idk lol
   `(+ (dolist (atom atoms)))) 
-
-
 
 (defun slice-2d-array (array index)
   "Returns the 1D array at the specified index of a 2D array."
@@ -229,7 +234,7 @@ The entire network is a list containing every layer.
   "Takes in a variable holding a lambda list and another holding a lambda expression, returns a lambda function that uses them.
   Example: a = (x y), b = (+ x y), (evaluate-lambda-exp a b) -> (lambda (x y) (+ x y).
   I'm not sure whether this actually works so it needs more testing."
-  `(lambda ,lambda-list ,(eval lambda-exp)))
+  `(lambda ,(eval lambda-list) ,(eval lambda-exp)))
 
 (defun remove-first (sequence)
   "Remove the first item in a sequence. This is basically the best function in the program."
