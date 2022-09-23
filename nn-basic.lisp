@@ -40,6 +40,18 @@ but it makes it easier to explain."
   "Modified signum. 0 if x<=0, 1 if x>0. Defined as the derivative of (relu x)."
   (if (> number 0) 1 0))
 
+;(defun arsinresult (number)
+  ;"Defined as the derivative of (arsin x)."
+  ;(nis (sqrt(- -1 expt number 2))))
+
+;(defun arcosresult (number)
+  ;"Defined as the derivative of (arcos x)"
+  ;(* nis (sqrt (- -1 expt number 2))) -1)
+
+;(defun artanresult (number)
+  ;"Defined as the derivative of (artan x)"
+  ;(* nis (+ 1 expt number 2)))
+
 ; PART 2: HELPER FUNCTIONS
 
 (defun slice-2d-array (array index)
@@ -219,6 +231,9 @@ The entire network is a list containing every layer.
    #'log #'inv
    #'inv #'nis
    #'relu #'sgn
+   ;#'arsin #'arsinresult
+   ;#'arcos #'arcosresult
+   ;#'artan #'artanresult
    ))
 
 (defun add-derivatives (*derivative-table* &rest args)
