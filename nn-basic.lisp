@@ -32,7 +32,63 @@ but it makes it easier to explain."
   "1/x. Defined as the derivative of (log x)."
   (/ 1 number))
 
-; PART 2: NODE OBJECT
+(defun nis (number)
+  "Negative inverse square; -1/x^2. Defined as the derivative of (inv x)."
+  (* -1 (expt number -2)))
+
+(defun sgn (number)
+  "Modified signum. 0 if x<=0, 1 if x>0. Defined as the derivative of (relu x)."
+  (if (> number 0) 1 0))
+
+; PART 2: HELPER FUNCTIONS
+
+(defun slice-2d-array (array index)
+  "Returns the 1D array at the specified index of a 2D array."
+  (make-array (array-dimension array 1)
+              :displaced-to array
+              :displaced-index-offset (* index (array-dimension array 1))))
+
+(defun get-lambda-exp (func)
+  "Gets the lambda body of a function. For example, if you put in (lambda (x) (* 2 x)), the function will output (* 2 x).
+  Watch out for variable name conflicts--variable names are returned as-is."
+  (elt (function-lambda-expression func) 2))
+
+(defun get-function-name (func)
+  "Returns the name of a function. Used to convert a function into a symbol."
+  (nth-value 2 (function-lambda-expression func)))
+
+(defmacro evaluate-name (name)
+  "Inverse of get-function-name. You put in a function name and it returns the function."
+  `(function ,(eval name))) ; the more eval forms you have the better your code is
+
+(defmacro evaluate-lambda-exp (lambda-list lambda-exp)
+  "Takes in a variable holding a lambda list and another holding a lambda expression, returns a lambda function that uses them.
+  Example: a = (x y), b = (+ x y), (evaluate-lambda-exp a b) -> (lambda (x y) (+ x y).
+  I'm not sure whether this actually works so it needs more testing."
+  `(lambda ,(eval lambda-list) ,(eval lambda-exp)))
+
+(defun make-full-vector (object expression)
+  "Makes a vector of the length of the given expression with initial-element object. Used as a helper for the map function."
+  (make-array (length expression) :initial-element object))
+
+(defun remove-first (sequence)
+  "Remove the first item in a sequence. This is basically the best function in the program."
+  (remove (elt sequence 0) sequence :count 1))
+
+(defun remove-nth (sequence index)
+  "Remove the nth item in a sequence."
+  (append (subseq sequence 0 index) (subseq sequence (+ 1 index))))
+
+(defun replace-with-randoms (expression)
+  "Replaces all calls to the elt and access-weight functions with a call to the get-one-random function.
+I programmed this while in a call with a bunch of anarchists and it worked on the first try. I don't know why it works. Just go with it."
+  (if (not (equal (type-of expression) 'cons)) ; not cons
+      (return-from replace-with-randoms expression))
+  (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'access-weight))
+      (return-from replace-with-randoms (get-one-random))
+      (return-from replace-with-randoms (map 'list #'replace-with-randoms expression))))
+
+; PART 3: NODE OBJECT
 
 (defclass node (standard-object)
                                         ; This is the node object. Every network is a list of layers, each layer is a list of nodes.
@@ -71,7 +127,23 @@ but it makes it easier to explain."
    (connecting-function :initarg :connecting-function :initform #'+ :accessor connecting-function
                         :documentation "Function that binds every inner-function together. Should be commutative f(b, a) = f(a, b), so * and + are good fits.")
    (inner-function :initarg :inner-function :initform (lambda (prev-node weights) (* prev-node (elt weights 0))) :accessor inner-function
-                   :documentation "Function called on every prev-node value. Uses weights.")))
+                   :documentation "Function called on every prev-node value. Uses weights.")
+   (function)
+   (derivative-formula)))
+
+(defun build-function (connecting-func inner-func prev-node-count)
+  "Returns the expanded form of (reduce connecting-func (map 'list connecting-func prev-nodes weights)), which is a differentiable function.
+@connecting-func Any function that takes &rest numbers args. Note that anything besides #'+ and #'* must be explained to the get-derivative function.
+@inner-func Lambda function that takes prev-node weights args, where prev-node is a number and weights is a sequence of numbers. Must be a lambda.
+@prev-node-count See prev-node-count slot in the node object."
+  (let* ((inner-lambda-list (elt (function-lambda-expression inner-func) 1)) (inner-lambda-exp (get-lambda-exp inner-func)) (output (list connecting-func)) (counter-symbol (gensym))
+         (replaced-inner-func (replace-if inner-lambda-list inner-lambda-exp counter-symbol))
+         (generator-function (evaluate-lambda-exp (list counter-symbol) 'replaced-inner-func)))
+    generator-function))
+
+
+; (defmethod initialize-instance :after ((node node) &key))
+  
 
 (defgeneric activate-node (node prev-nodes)
   )
@@ -135,26 +207,28 @@ The entire network is a list containing every layer.
           (setf network (append network (list layer-data))))))
     (return-from initialize-network-mono network)))
 
-; PART 3: DERIVATIVES (or: Functional Programming Hell) (Also Featuring Helper Functions)
+; PART 4: DERIVATIVES (or: Functional Programming Hell)
 
 (defun generate-derivative-table ()
   "The derivative table is the base for the get-derivative function. It's a lookup table for the most elementary derivatives."
   (defparameter *derivative-table* (make-hash-table)) ; Global hash table. Access this using (gethash [function] *derivative-table*)
-  (add-derivatives
+  (add-derivatives *derivative-table*
    #'sin #'cos
    #'cos #'nsin
    #'exp #'exp
    #'log #'inv
+   #'inv #'nis
+   #'relu #'sgn
    ))
 
-(defun add-derivatives (&rest args)
+(defun add-derivatives (*derivative-table* &rest args)
                                         ; Helper function for generate-derivative-table.
                                         ; Works like setf, taking an even number of arguments. Instead of setting A to B, it sets hash A to value B.
   (dotimes (binding (/ (length args) 2))
     (let ((func (elt args (* binding 2))) (deriv (elt args (+ (* binding 2) 1))))
-      (add-one-deriv func deriv))))
+      (add-one-deriv *derivative-table* func deriv))))
 
-(defmacro add-one-deriv (x y)
+(defmacro add-one-deriv (*derivative-table* x y)
                                         ; Helper macro for add-derivatives. Adds one function and its derivative to the table.
   `(progn (setf (gethash ,x *derivative-table*) ,y)
           (setf (gethash (get-function-name ,x) *derivative-table*) T)))
@@ -171,10 +245,9 @@ The entire network is a list containing every layer.
                                         ; If this is unintuitive and confusing, sorry. I couldn't think of a better word.
                                         ; The idea of recursive calls to this function is that we can eventually break down the larger atoms by splitting them into first-atom and rest-atoms,
                                         ; splitting something like (sin (cos x)) into sin and (cos x), then going down to (cos x).
-  (if (equal (type-of func) 'symbol) ; See below, except if the variable is not in a list
-      (if (equal func x)
-          (return-from get-derivative 1)
-          (return-from get-derivative 0)))
+  (if (equal func x) (return-from get-derivative 1))
+  (if (or (not (equal (type-of func) 'cons)) (equal (elt func 0) 'access-weight) (equal (elt func 0) 'elt)) ; See below, except if the variable is not in a list
+      (return-from get-derivative 0))
   (if (equal (length func) 1) ; One atom is in the provided lambda expression. This is a variable. If it is not, someone else screwed up.
       (if (equal (elt func 0) x) ; Are we finding the derivative with respect to this variable?
           (return-from get-derivative 1) ; Return 1 if yes
@@ -199,46 +272,35 @@ The entire network is a list containing every layer.
         (let ((first-deriv (gethash (eval `(function ,first-atom)) *derivative-table*))) ; looks up the derivative
           (return-from get-derivative ; Uses the chain rule.
             `(* (,(get-function-name first-deriv) ,rest-atoms) ; f'(g(x))
-              ,(get-derivative rest-atoms x))))) ; g'(x)
+                ,(get-derivative rest-atoms x))))) ; g'(x)
     (if (equal first-atom '+) ; sum
         (return-from get-derivative `(+ ,@(map 'list #'get-derivative rest-atoms                       ; Use ,@ to break the outer list so we can access the elements using the + function. Reduce doesn't work.
-                                               (make-array (length rest-atoms) :initial-element x))))) ; Call get-derivative on each rest-atom, so we need this array of xs to pass into map
-    ; (if (equal first-atom '*) ; product rule
-        ; )
-    ))
+                                               (make-full-vector x rest-atoms)))))                     ; Call get-derivative on each rest-atom, so we need this array of xs to pass into map
+    (if (equal first-atom '*) ; product rule
+        (let* ((factors rest-atoms) (factor-derivs (map 'list #'get-derivative factors (make-full-vector x factors))) (indices))
+                                        ; Evaluate each item in factor-derivs with a random number inserted in place of all weight calls
+          (dotimes (index (length factors))
+            (if (not (= 0 (eval (replace-with-randoms (elt factor-derivs index)))))
+                (setf indices (append indices (list index))))) ; Keep the index of every evaluation that isn't 0
+          (if (not indices) ;all derivatives are 0
+              (return-from get-derivative 0))
+          (if (< (length indices) 3) ;1 or 2 derivatives are non-zero. Most efficient to store in the form f'gh + fg'h (where f g h are functions, and h' = 0)
+              (let ((return-value '(+)))
+                (dolist (index indices)
+                  (setf return-value (append return-value (list `(* ,(elt factor-derivs index) ,@(remove-nth factors index))))))
+                (return-from get-derivative return-value))
+              
+              (let ((return-value `(* ,func)) (plus-value '(+)))
+                                        ;3 or more derivatives are non-zero. Most efficient to store in the form fghj*(f'/f + g'/g + h'/h + j'/j) (where f g h j are functions, and all derivatives are non-zero)
+                (dolist (index indices)
+                  (setf plus-value (append plus-value (list `(* ,(elt factor-derivs index) (inv ,(elt factors index)))))))
+                (return-from get-derivative (append return-value (list plus-value)))))))))
 
 (defun product-rule (&rest atoms)
   ; idk lol
   `(+ (dolist (atom atoms)))) 
 
-(defun slice-2d-array (array index)
-  "Returns the 1D array at the specified index of a 2D array."
-  (make-array (array-dimension array 1)
-              :displaced-to array
-              :displaced-index-offset (* index (array-dimension array 1))))
 
-(defun get-lambda-exp (func)
-  "Gets the lambda body of a function. For example, if you put in (lambda (x) (* 2 x)), the function will output (* 2 x).
-  Watch out for variable name conflicts--variable names are returned as-is."
-  (elt (function-lambda-expression func) 2))
-
-(defun get-function-name (func)
-  "Returns the name of a function. Used to convert a function into a symbol."
-  (nth-value 2 (function-lambda-expression func)))
-
-(defmacro evaluate-name (name)
-  "Inverse of get-function-name. You put in a function name and it returns the function."
-  `(function ,(eval name))) ; the more eval forms you have the better your code is
-
-(defmacro evaluate-lambda-exp (lambda-list lambda-exp)
-  "Takes in a variable holding a lambda list and another holding a lambda expression, returns a lambda function that uses them.
-  Example: a = (x y), b = (+ x y), (evaluate-lambda-exp a b) -> (lambda (x y) (+ x y).
-  I'm not sure whether this actually works so it needs more testing."
-  `(lambda ,(eval lambda-list) ,(eval lambda-exp)))
-
-(defun remove-first (sequence)
-  "Remove the first item in a sequence. This is basically the best function in the program."
-  (remove (elt sequence 0) sequence :count 1))
 
 (defun backpropagate (network errors)
   "Goes backwards through the network to find gradients for each weight and bias. Currently unfinished."
