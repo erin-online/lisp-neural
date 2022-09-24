@@ -9,7 +9,8 @@
 ; 2. Create an alternative to activate-network that returns the list of activations for every layer, not just the last ones.
 ; 3. Finish backpropagation using the function from 2
 ; 4. Work on file I/O for image recognition using data from the MNIST database http://yann.lecun.com/exdb/mnist/. This will result in a basic functioning neural network.
-; 5. Explore xenodes and other ideas
+; 5. Allow for networks to be imported and exported via files.
+; 6. Explore xenodes and other ideas
 
 ; PART 1: MATH FUNCTIONS
 
@@ -40,17 +41,17 @@ but it makes it easier to explain."
   "Modified signum. 0 if x<=0, 1 if x>0. Defined as the derivative of (relu x)."
   (if (> number 0) 1 0))
 
-;(defun arsinresult (number)
-  ;"Defined as the derivative of (arsin x)."
-  ;(nis (sqrt(- -1 expt number 2))))
+(defun asinp (number)
+  "Arcsine prime. 1/sqrt(1-x^2). Defined as the derivative of (asin x)."
+  (inv (sqrt (- 1 (expt number 2)))))
 
-;(defun arcosresult (number)
-  ;"Defined as the derivative of (arcos x)"
-  ;(* nis (sqrt (- -1 expt number 2))) -1)
+(defun acosp (number)
+  "Arccosine prime. -1/sqrt(1-x^2). Defined as the derivative of (acos x)."
+  (* -1 (inv (sqrt (- 1 (expt number 2))))))
 
-;(defun artanresult (number)
-  ;"Defined as the derivative of (artan x)"
-  ;(* nis (+ 1 expt number 2)))
+(defun atanp (number)
+  "Arctangent prime. 1/(1+x^2). Defined as the derivative of (atan x)."
+  (inv (+ 1 (expt number 2))))
 
 ; PART 2: HELPER FUNCTIONS
 
@@ -60,7 +61,7 @@ but it makes it easier to explain."
               :displaced-to array
               :displaced-index-offset (* index (array-dimension array 1))))
 
-(defun get-lambda-exp (func)
+(defun get-lambda-body (func)
   "Gets the lambda body of a function. For example, if you put in (lambda (x) (* 2 x)), the function will output (* 2 x).
   Watch out for variable name conflicts--variable names are returned as-is."
   (elt (function-lambda-expression func) 2))
@@ -99,6 +100,24 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
   (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'access-weight))
       (return-from replace-with-randoms (get-one-random))
       (return-from replace-with-randoms (map 'list #'replace-with-randoms expression))))
+
+(defun replace-with-accesses (expression n)
+  "Replaces all references to prev-node with (elt prev-nodes n), and all instances of (elt weights m) with (access-weight node n m)."
+  (if (not (equal (type-of expression) 'cons))
+      (if (equal expression 'prev-node)
+          (return-from replace-with-accesses `(elt prev-nodes ,n))
+          (return-from replace-with-accesses expression)))
+  (if (equal (elt expression 0) 'elt)
+      (return-from replace-with-accesses `(access-weight node ,n ,(elt expression 2)))
+      (return-from replace-with-accesses (map 'list #'replace-with-accesses expression (make-full-vector n expression)))))
+
+(defmacro locked-lambda (&body body)
+  "Lambda function with the arguments locked into (prev-node weights). The user will have to use these arguments in the body."
+  `(lambda (prev-node weights) ,@body))
+
+(defmacro reduce-map (func1 func2 &rest sequences)
+  "Calls (reduce func1) on the result of (map func2 sequences)."
+  `(reduce ,func1 (map 'list ,func2 ,@sequences)))
 
 ; PART 3: NODE OBJECT
 
@@ -231,9 +250,9 @@ The entire network is a list containing every layer.
    #'log #'inv
    #'inv #'nis
    #'relu #'sgn
-   ;#'arsin #'arsinresult
-   ;#'arcos #'arcosresult
-   ;#'artan #'artanresult
+   #'asin #'asinp
+   #'acos #'acosp
+   #'atan #'atanp
    ))
 
 (defun add-derivatives (*derivative-table* &rest args)
@@ -297,25 +316,27 @@ The entire network is a list containing every layer.
           (dotimes (index (length factors))
             (if (not (= 0 (eval (replace-with-randoms (elt factor-derivs index)))))
                 (setf indices (append indices (list index))))) ; Keep the index of every evaluation that isn't 0
-          (if (not indices) ;all derivatives are 0
+          (if (not indices) ; all derivatives are 0
               (return-from get-derivative 0))
-          (if (< (length indices) 3) ;1 or 2 derivatives are non-zero. Most efficient to store in the form f'gh + fg'h (where f g h are functions, and h' = 0)
+          (if (< (length indices) 3) ; 1 or 2 derivatives are non-zero. Most efficient to store in the form f'gh + fg'h (where f g h are functions, and h' = 0)
               (let ((return-value '(+)))
                 (dolist (index indices)
                   (setf return-value (append return-value (list `(* ,(elt factor-derivs index) ,@(remove-nth factors index))))))
                 (return-from get-derivative return-value))
               
               (let ((return-value `(* ,func)) (plus-value '(+)))
-                                        ;3 or more derivatives are non-zero. Most efficient to store in the form fghj*(f'/f + g'/g + h'/h + j'/j) (where f g h j are functions, and all derivatives are non-zero)
+                                        ; 3 or more derivatives are non-zero. Most efficient to store in the form fghj*(f'/f + g'/g + h'/h + j'/j) (where f g h j are functions, and all derivatives are non-zero)
                 (dolist (index indices)
                   (setf plus-value (append plus-value (list `(* ,(elt factor-derivs index) (inv ,(elt factors index)))))))
-                (return-from get-derivative (append return-value (list plus-value)))))))))
+                (return-from get-derivative (append return-value (list plus-value)))))))
 
-(defun product-rule (&rest atoms)
-  ; idk lol
-  `(+ (dolist (atom atoms)))) 
-
-
+    (if (equal first-atom 'reduce-map) ; reduce-map function. This can only be used when looping through all the prevnodes.
+                                        ; (elt rest-atoms 1) WILL BE a lambda function that takes prev-node and weights as arguments (see locked-lambda). We can make assumptions based on this.
+        (let ((replaced-func (replace-with-accesses (get-lambda-body (eval (elt rest-atoms 1))) (elt x 2))))
+          (if (equal (elt rest-atoms 0) '#'+) ; adding up a list
+              (return-from get-derivative (get-derivative replaced-func x)))
+          (if (equal (elt rest-atoms 0) '#'*) ; multiplication (works; kinda weird)
+              (return-from get-derivative `(* ,func ,(get-derivative replaced-func x) (inv ,replaced-func))))))))
 
 (defun backpropagate (network errors)
   "Goes backwards through the network to find gradients for each weight and bias. Currently unfinished."
