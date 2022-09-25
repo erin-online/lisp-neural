@@ -2,11 +2,11 @@
 ; Doesn't work with stuff like chess because I haven't figured that out yet.
 ; Chess is hard and neural networks are hard.
 ;
-; NOTE: This program requires the array-operations or aops package. Install it with (ql:quickload :array-operations), then do (in-package :array-operations) to get in.
+; NOTE: This program requires the array-operations or aops package. Load it with (ql:quickload :array-operations). Eventually I'll add something into the code to load it automatically.
 ;
 ; TO-DO:
 ;✓1. Node as an object, represent each layer as a list of nodes. Also, allow for the creation of multiple networks.
-; 2. Create an alternative to activate-network that returns the list of activations for every layer, not just the last ones.
+;✓2. Create an alternative to activate-network that returns the list of activations for every layer, not just the last ones.
 ; 3. Finish backpropagation using the function from 2
 ; 4. Work on file I/O for image recognition using data from the MNIST database http://yann.lecun.com/exdb/mnist/. This will result in a basic functioning neural network.
 ; 5. Allow for networks to be imported and exported via files.
@@ -151,45 +151,30 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                                         ; After that, connecting-function (inner-function-results*) is called to bind together every inner-function result. This might involve adding them up with #'+.
                                         ; Next, outer-function is called on the result of connecting-function. outer-function is typically pretty simple and looks something like (+ bias connecting-function-result).
                                         ; Finally, norm-function is called on the result of outer-function. This produces the number for the node.
-   (norm-function :initarg :norm-function :initform #'relu :accessor norm-function
-                  :documentation "Normalizing function such as ReLU, applied to the final value of outer-function.")
-   (outer-function :initarg :outer-function :initform (lambda (node-value bias) (+ node-value bias)) :accessor outer-function
-                   :documentation "Function applied to the node as a whole, not to individual weights. Example is adding bias.")
-   (connecting-function :initarg :connecting-function :initform #'+ :accessor connecting-function
-                        :documentation "Function that binds every inner-function together. Should be commutative f(b, a) = f(a, b), so * and + are good fits.")
-   (inner-function :initarg :inner-function :initform (lambda (prev-node weights) (* prev-node (elt weights 0))) :accessor inner-function
-                   :documentation "Function called on every prev-node value. Uses weights.")
-   (function)
-   (derivative-formula)))
+   (node-function :initarg :node-function :initform '(lambda (prev-nodes weights) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))) :accessor node-function
+             :documentation "Function for the activation (output) of the node. Called every time the node is activated.")
+   weights-derivatives
+   outer-params-derivatives))
 
-(defun build-function (connecting-func inner-func prev-node-count)
-  "Returns the expanded form of (reduce connecting-func (map 'list connecting-func prev-nodes weights)), which is a differentiable function.
-@connecting-func Any function that takes &rest numbers args. Note that anything besides #'+ and #'* must be explained to the get-derivative function.
-@inner-func Lambda function that takes prev-node weights args, where prev-node is a number and weights is a sequence of numbers. Must be a lambda.
-@prev-node-count See prev-node-count slot in the node object."
-  (let* ((inner-lambda-list (elt (function-lambda-expression inner-func) 1)) (inner-lambda-exp (get-lambda-exp inner-func)) (output (list connecting-func)) (counter-symbol (gensym))
-         (replaced-inner-func (replace-if inner-lambda-list inner-lambda-exp counter-symbol))
-         (generator-function (evaluate-lambda-exp (list counter-symbol) 'replaced-inner-func)))
-    generator-function))
-
-
-; (defmethod initialize-instance :after ((node node) &key))
-  
+(defmethod initialize-instance :after ((node node) &key)
+                                        ; Loop through the 2D array of weights
+  (let* ((dims (array-dimensions (weights node))) (func (get-lambda-body (eval (node-function node)))) (wd-array (make-array dims)) (outer-params (outer-params node)))
+    (dotimes (prev-node (elt dims 0))
+      (let ((prev-node-array (make-array (elt dims 1) :fill-pointer 0)))
+        (dotimes (weight (elt dims 1))
+          (vector-push (get-derivative func `(access-weight node ,prev-node ,weight)) prev-node-array) ; Take derivative of formula with respect to each weight
+          (setf (aref wd-array prev-node weight) prev-node-array))))
+    (setf (slot-value node 'weights-derivatives) wd-array)
+                                        ; Loop through the 1D array of outer-params
+    (setf (slot-value node 'outer-params-derivatives) (map 'vector #'get-derivative (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))))  
 
 (defgeneric activate-node (node prev-nodes)
   )
 
 (defmethod activate-node ((node node) prev-nodes)
   "Takes in a node and a list of outputs in the previous layer. Returns the output (number) for that node."
-                                        ; call inner-function on each prev-node
-  (let ((inner-function-results (make-array (prev-node-count node) :fill-pointer 0)) (bias (elt (outer-params node) 0)))
-    (dotimes (prev-node-counter (prev-node-count node))
-      (let ((weights (slice-2d-array (weights node) prev-node-counter)) (prev-node (elt prev-nodes prev-node-counter)))
-        (vector-push (funcall (inner-function node) prev-node weights) inner-function-results))) ; push result to the inner-function-results vector
-    (let* ((connecting-function-result (reduce (connecting-function node) inner-function-results)) ; call connecting-function to reduce the inner function results
-           (outer-function-result (funcall (outer-function node) connecting-function-result bias)) ; call outer function on the connecting function result
-           (norm-function-result (funcall (norm-function node) outer-function-result))) ; call norm function on the outer function result
-      norm-function-result))) ; return norm function result
+  (let ((weights (weights node))) ; Maybe a little unnecessary. This made more sense when we still had the separated function.
+    (funcall (eval (node-function node)) prev-nodes weights)))
 
 (defgeneric access-weight (node prev-node-index weight-index)
   )
@@ -207,6 +192,15 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
       (dotimes (node-number nodes-in-layer) ; for each node in the layer
         (vector-push (activate-node (elt (elt network layer-number) node-number) prev-nodes) current-nodes)) ; push the activate-node result to the vector
       (setf prev-nodes current-nodes)))) ; moving to the next layer. This also returns current-nodes, meaning we don't need a dedicated return statement.
+
+(defun get-activation-list (network input-nodes)
+  "Like activate-network, but returns a list of every activation, including the input-nodes."
+  (let ((activations (list input-nodes)) (prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
+    (dotimes (layer-number (length network) activations)
+      (setf nodes-in-layer (length (elt network layer-number)))
+      (setf current-nodes (map 'list #'activate-node (elt network layer-number) (make-array nodes-in-layer :initial-element prev-nodes))) ; map function is overpowered. no idea how this works
+      (setf activations (append activations (list current-nodes)))
+      (setf prev-nodes current-nodes))))
 
 (defun generate-weights (initializer prev-node-count weights-per-prev-node)
   "Generates a 2D weights array for a node using the aops library. Sets each weight to the result of a call to the (typically random) initializer function."
@@ -312,7 +306,7 @@ The entire network is a list containing every layer.
                                                (make-full-vector x rest-atoms)))))                     ; Call get-derivative on each rest-atom, so we need this array of xs to pass into map
     (if (equal first-atom '*) ; product rule
         (let* ((factors rest-atoms) (factor-derivs (map 'list #'get-derivative factors (make-full-vector x factors))) (indices))
-                                        ; Evaluate each item in factor-derivs with a random number inserted in place of all weight calls
+                                        ; Evaluate each item in factor-derivs with a random number inserted in place of all weight calls. Yes, this is unsafe. No, I do not care.
           (dotimes (index (length factors))
             (if (not (= 0 (eval (replace-with-randoms (elt factor-derivs index)))))
                 (setf indices (append indices (list index))))) ; Keep the index of every evaluation that isn't 0
@@ -320,9 +314,11 @@ The entire network is a list containing every layer.
               (return-from get-derivative 0))
           (if (< (length indices) 3) ; 1 or 2 derivatives are non-zero. Most efficient to store in the form f'gh + fg'h (where f g h are functions, and h' = 0)
               (let ((return-value '(+)))
+                (if (< (length indices) 2) ; Expression will be only 1 element, remove the + at the beginning
+                    (setf return-value NIL))
                 (dolist (index indices)
                   (setf return-value (append return-value (list `(* ,(elt factor-derivs index) ,@(remove-nth factors index))))))
-                (return-from get-derivative return-value))
+                (return-from get-derivative (if (> (length indices) 1) return-value (elt return-value 0))))
               
               (let ((return-value `(* ,func)) (plus-value '(+)))
                                         ; 3 or more derivatives are non-zero. Most efficient to store in the form fghj*(f'/f + g'/g + h'/h + j'/j) (where f g h j are functions, and all derivatives are non-zero)
@@ -336,7 +332,7 @@ The entire network is a list containing every layer.
           (if (equal (elt rest-atoms 0) '#'+) ; adding up a list
               (return-from get-derivative (get-derivative replaced-func x)))
           (if (equal (elt rest-atoms 0) '#'*) ; multiplication (works; kinda weird)
-              (return-from get-derivative `(* ,func ,(get-derivative replaced-func x) (inv ,replaced-func))))))))
+              (return-from get-derivative `(* activation ,(get-derivative replaced-func x) (inv ,replaced-func))))))))
 
 (defun backpropagate (network errors)
   "Goes backwards through the network to find gradients for each weight and bias. Currently unfinished."
