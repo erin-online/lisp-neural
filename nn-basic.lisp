@@ -111,6 +111,15 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
       (return-from replace-with-accesses `(access-weight node ,n ,(elt expression 2)))
       (return-from replace-with-accesses (map 'list #'replace-with-accesses expression (make-full-vector n expression)))))
 
+(defun get-zl-function (expression)
+  "Goes through expression until it finds a (reduce-map #'*) function, then returns that function. Returns NIL if no such function is found."
+  (if (not (equal (type-of expression) 'cons))
+      (return-from get-zl-function)
+      (if (and (equal (elt expression 0) 'reduce-map) (equal (elt expression 1) '#'*))
+          (return-from get-zl-function expression)
+          (let ((map-result (remove NIL (map 'list #'get-zl-function expression))))
+            (return-from get-zl-function (if map-result (elt map-result 0) map-result))))))
+
 (defmacro locked-lambda (&body body)
   "Lambda function with the arguments locked into (prev-node weights). The user will have to use these arguments in the body."
   `(lambda (prev-node weights) ,@body))
@@ -119,135 +128,22 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
   "Calls (reduce func1) on the result of (map func2 sequences)."
   `(reduce ,func1 (map 'list ,func2 ,@sequences)))
 
-; PART 3: NODE OBJECT
-
-(defclass node (standard-object)
-                                        ; This is the node object. Every network is a list of layers, each layer is a list of nodes.
-                                        ; The node stores four main things: prev-node-count, weights, outer-params, and function.
-                                        ; Right now the function is split up into several parts, but this is really unnecessary.
-                                        ; Also, it prevents true xenodes such as output = weight1*prevnode1 + prevnode2^weight2,
-                                        ; where each prevnode can have a different function attached to it.
-                                        ; This isn't on my top priority of things to implement, but consolidating the function might
-                                        ; also make derivative calculating easier, so I might just do it anyway.
-
-                                        ; Behavior:
-                                        ; When the network is activated, each node gets passed all the output values from the previous layer of nodes ("prevnodes").
-                                        ; The node then plugs all these values into its function to determine its own output value.
-                                        ; TODO: When backpropagation is implemented, the node finds the derivative of every weight compared to the node activation
-                                        ; (i.e. if you change the weight by a small amount, what will the comparative change in activation be?)
-                                        ; and adjusts the weights depending on the error values ("cost") of network activations.
-  
-  ((prev-node-count :initarg :prev-node-count :initform (error "prev-node-count not defined") :accessor prev-node-count
-               :documentation "Number of nodes in the previous layer.")
-   (weights :initarg :weights :initform (error "weights not provided") :accessor weights
-            :documentation "2D array with weights. Each sub-array is the weights for one prev-node.")
-                                        ; If the above is confusing: For an inner-function that takes 2 weights; for example,
-                                        ; a(L) = b + w1alpha * sin(w1beta * a(L-1, 1)) + ..., the weights array will look like
-                                        ; #2A((w1alpha w1beta) (w2alpha w2beta) ...)
-   (outer-params :initarg :outer-params :initform (error "outer params not provided") :accessor outer-params
-                 :documentation "List of params applied to the outer function i.e. not on each weight. Bias and coefficient go here.")
-                                        ; There are a bunch of functions here. This is how the node activation is calculated:
-                                        ; First, inner-function is called on each prev-node activation value; for example, (* weight prev-node).
-                                        ; After that, connecting-function (inner-function-results*) is called to bind together every inner-function result. This might involve adding them up with #'+.
-                                        ; Next, outer-function is called on the result of connecting-function. outer-function is typically pretty simple and looks something like (+ bias connecting-function-result).
-                                        ; Finally, norm-function is called on the result of outer-function. This produces the number for the node.
-   (node-function :initarg :node-function :initform '(lambda (prev-nodes weights) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))) :accessor node-function
-             :documentation "Function for the activation (output) of the node. Called every time the node is activated.")
-   weights-derivatives
-   outer-params-derivatives))
-
-(defmethod initialize-instance :after ((node node) &key)
-                                        ; Loop through the 2D array of weights
-  (let* ((dims (array-dimensions (weights node))) (func (get-lambda-body (eval (node-function node)))) (wd-array (make-array dims)) (outer-params (outer-params node)))
-    (dotimes (prev-node (elt dims 0))
-      (let ((prev-node-array (make-array (elt dims 1) :fill-pointer 0)))
-        (dotimes (weight (elt dims 1))
-          (vector-push (get-derivative func `(access-weight node ,prev-node ,weight)) prev-node-array) ; Take derivative of formula with respect to each weight
-          (setf (aref wd-array prev-node weight) prev-node-array))))
-    (setf (slot-value node 'weights-derivatives) wd-array)
-                                        ; Loop through the 1D array of outer-params
-    (setf (slot-value node 'outer-params-derivatives) (map 'vector #'get-derivative (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))))  
-
-(defgeneric activate-node (node prev-nodes)
-  )
-
-(defmethod activate-node ((node node) prev-nodes)
-  "Takes in a node and a list of outputs in the previous layer. Returns the output (number) for that node."
-  (let ((weights (weights node))) ; Maybe a little unnecessary. This made more sense when we still had the separated function.
-    (funcall (eval (node-function node)) prev-nodes weights)))
-
-(defgeneric access-weight (node prev-node-index weight-index)
-  )
-
-(defmethod access-weight ((node node) prev-node-index weight-index)
-  ; Helper function so I don't have to constantly use slice-2d-array and elt to access a specific weight.
-  (elt (slice-2d-array (weights node) prev-node-index) weight-index))
-
-(defun activate-network (network input-nodes)
-  "Activates an entire network given a list of input nodes."
-  (let ((prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
-    (dotimes (layer-number (length network) current-nodes)
-      (setf nodes-in-layer (length (elt network layer-number))) ; find how many nodes are in the layer so we can make our vector
-      (setf current-nodes (make-array nodes-in-layer :fill-pointer 0)) ; make an empty vector for the current layer
-      (dotimes (node-number nodes-in-layer) ; for each node in the layer
-        (vector-push (activate-node (elt (elt network layer-number) node-number) prev-nodes) current-nodes)) ; push the activate-node result to the vector
-      (setf prev-nodes current-nodes)))) ; moving to the next layer. This also returns current-nodes, meaning we don't need a dedicated return statement.
-
-(defun get-activation-list (network input-nodes)
-  "Like activate-network, but returns a list of every activation, including the input-nodes."
-  (let ((activations (list input-nodes)) (prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
-    (dotimes (layer-number (length network) activations)
-      (setf nodes-in-layer (length (elt network layer-number)))
-      (setf current-nodes (map 'list #'activate-node (elt network layer-number) (make-array nodes-in-layer :initial-element prev-nodes))) ; map function is overpowered. no idea how this works
-      (setf activations (append activations (list current-nodes)))
-      (setf prev-nodes current-nodes))))
-
-(defun generate-weights (initializer prev-node-count weights-per-prev-node)
-  "Generates a 2D weights array for a node using the aops library. Sets each weight to the result of a call to the (typically random) initializer function."
-  (aops:generate initializer (list prev-node-count weights-per-prev-node)))
-
-(defun initialize-network-mono (sizes initializer)
-  "Creates the network of nodes, sets every weight and bias according to the initializer.
-Each layer is formatted as (#(biases) (#(weights1) #(weights2) ...)).
-In other words, it's a list containing a 1D vector and a 2D vector.
-The entire network is a list containing every layer.
-@sizes List of integers describing number of nodes in each layer.
-@initializer Function that initializes value for each weight and bias. Currently using get-one-random."
-  (defparameter *norm-function* #'relu)
-  (let ((sizes-no-input (remove-first sizes)) (network NIL))
-                                        ; NOTE: The input layer does NOT have dedicated node objects, because its values are given by an outside source.
-                                        ; For example, an input layer might be how dark a pixel in an image is, for an image recognition network.
-                                        ; The input layer itself goes through no function. This is why we use remove-first.
-    
-    (dotimes (layer (length sizes-no-input))
-      (let ((layer-size (elt sizes-no-input layer)))
-        (let ((layer-data (make-array layer-size :fill-pointer 0))) ; make an empty vector for the layer. Could have used let* to have this line and the previous in 1 but oh well.
-          (dotimes (current-node layer-size)
-            (vector-push (make-instance 'node ; Makes a new node to put in the vector.
-                                        :prev-node-count (elt sizes layer) ; (elt sizes layer) is equal to (elt sizes-no-input layer) - 1, meaning it's a handy way of accessing the size of the previous layer.
-                                        ; This is necessary to give the nodes input about how many nodes are in the previous layer; for example, how many weights they need.
-                                        :weights (generate-weights initializer (elt sizes layer) 1)
-                                        :outer-params (aops:generate initializer 1))
-                         layer-data))
-          (setf network (append network (list layer-data))))))
-    (return-from initialize-network-mono network)))
-
-; PART 4: DERIVATIVES (or: Functional Programming Hell)
+; PART 3: DERIVATIVES (or: Functional Programming Hell)
 
 (defun generate-derivative-table ()
   "The derivative table is the base for the get-derivative function. It's a lookup table for the most elementary derivatives."
   (defparameter *derivative-table* (make-hash-table)) ; Global hash table. Access this using (gethash [function] *derivative-table*)
   (add-derivatives *derivative-table*
-   #'sin #'cos
-   #'cos #'nsin
-   #'exp #'exp
-   #'log #'inv
-   #'inv #'nis
-   #'relu #'sgn
-   #'asin #'asinp
-   #'acos #'acosp
-   #'atan #'atanp
-   ))
+                   #'sin #'cos
+                   #'cos #'nsin
+                   #'exp #'exp
+                   #'log #'inv
+                   #'inv #'nis
+                   #'relu #'sgn
+                   #'asin #'asinp
+                   #'acos #'acosp
+                   #'atan #'atanp
+                   ))
 
 (defun add-derivatives (*derivative-table* &rest args)
                                         ; Helper function for generate-derivative-table.
@@ -332,7 +228,124 @@ The entire network is a list containing every layer.
           (if (equal (elt rest-atoms 0) '#'+) ; adding up a list
               (return-from get-derivative (get-derivative replaced-func x)))
           (if (equal (elt rest-atoms 0) '#'*) ; multiplication (works; kinda weird)
-              (return-from get-derivative `(* activation ,(get-derivative replaced-func x) (inv ,replaced-func))))))))
+              (return-from get-derivative `(* zl ,(get-derivative replaced-func x) (inv ,replaced-func))))))))
+
+; PART 4: NODE OBJECT
+
+(defclass node (standard-object)
+                                        ; This is the node object. Every network is a list of layers, each layer is a list of nodes.
+                                        ; The node stores four main things: prev-node-count, weights, outer-params, and function.
+                                        ; Right now the function is split up into several parts, but this is really unnecessary.
+                                        ; Also, it prevents true xenodes such as output = weight1*prevnode1 + prevnode2^weight2,
+                                        ; where each prevnode can have a different function attached to it.
+                                        ; This isn't on my top priority of things to implement, but consolidating the function might
+                                        ; also make derivative calculating easier, so I might just do it anyway.
+
+                                        ; Behavior:
+                                        ; When the network is activated, each node gets passed all the output values from the previous layer of nodes ("prevnodes").
+                                        ; The node then plugs all these values into its function to determine its own output value.
+                                        ; TODO: When backpropagation is implemented, the node finds the derivative of every weight compared to the node activation
+                                        ; (i.e. if you change the weight by a small amount, what will the comparative change in activation be?)
+                                        ; and adjusts the weights depending on the error values ("cost") of network activations.
+  
+  ((prev-node-count :initarg :prev-node-count :initform (error "prev-node-count not defined") :accessor prev-node-count
+               :documentation "Number of nodes in the previous layer.")
+   (weights :initarg :weights :initform (error "weights not provided") :accessor weights
+            :documentation "2D array with weights. Each sub-array is the weights for one prev-node.")
+                                        ; If the above is confusing: For an inner-function that takes 2 weights; for example,
+                                        ; a(L) = b + w1alpha * sin(w1beta * a(L-1, 1)) + ..., the weights array will look like
+                                        ; #2A((w1alpha w1beta) (w2alpha w2beta) ...)
+   (outer-params :initarg :outer-params :initform (error "outer params not provided") :accessor outer-params
+                 :documentation "List of params applied to the outer function i.e. not on each weight. Bias and coefficient go here.")
+                                        ; There are a bunch of functions here. This is how the node activation is calculated:
+                                        ; First, inner-function is called on each prev-node activation value; for example, (* weight prev-node).
+                                        ; After that, connecting-function (inner-function-results*) is called to bind together every inner-function result. This might involve adding them up with #'+.
+                                        ; Next, outer-function is called on the result of connecting-function. outer-function is typically pretty simple and looks something like (+ bias connecting-function-result).
+                                        ; Finally, norm-function is called on the result of outer-function. This produces the number for the node.
+   (node-function :initarg :node-function :initform '(lambda (prev-nodes weights) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))) :accessor node-function
+             :documentation "Function for the activation (output) of the node. Called every time the node is activated.")
+   weights-derivatives
+   outer-params-derivatives))
+
+(defmethod initialize-instance :after ((node node) &key)
+                                        ; Loop through the 2D array of weights
+  (let* ((dims (array-dimensions (weights node))) (func (get-lambda-body (eval (node-function node)))) (wd-array (make-array dims)) (outer-params (outer-params node)))
+    (dotimes (prev-node (elt dims 0))
+      (let ((prev-node-array (make-array (elt dims 1) :fill-pointer 0)))
+        (dotimes (weight (elt dims 1))
+          (vector-push (get-derivative func `(access-weight node ,prev-node ,weight)) prev-node-array) ; Take derivative of formula with respect to each weight
+          (setf (aref wd-array prev-node weight) prev-node-array))))
+    (setf (slot-value node 'weights-derivatives) wd-array)
+                                        ; Loop through the 1D array of outer-params
+    (setf (slot-value node 'outer-params-derivatives) (map 'vector #'get-derivative (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))))  
+
+(defgeneric activate-node (node prev-nodes)
+  )
+
+(defmethod activate-node ((node node) prev-nodes)
+  "Takes in a node and a list of outputs in the previous layer. Returns the output (number) for that node."
+  (let ((weights (weights node))) ; Maybe a little unnecessary. This made more sense when we still had the separated function.
+    (funcall (eval (node-function node)) prev-nodes weights)))
+
+(defgeneric access-weight (node prev-node-index weight-index)
+  )
+
+(defmethod access-weight ((node node) prev-node-index weight-index)
+  ; Helper function so I don't have to constantly use slice-2d-array and elt to access a specific weight.
+  (elt (slice-2d-array (weights node) prev-node-index) weight-index))
+
+(defun generate-weights (initializer prev-node-count weights-per-prev-node)
+  "Generates a 2D weights array for a node using the aops library. Sets each weight to the result of a call to the (typically random) initializer function."
+  (aops:generate initializer (list prev-node-count weights-per-prev-node)))
+
+; PART 5: NETWORK OPERATIONS
+
+(defun activate-network (network input-nodes)
+  "Activates an entire network given a list of input nodes."
+  (let ((prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
+    (dotimes (layer-number (length network) current-nodes)
+      (setf nodes-in-layer (length (elt network layer-number))) ; find how many nodes are in the layer so we can make our vector
+      (setf current-nodes (make-array nodes-in-layer :fill-pointer 0)) ; make an empty vector for the current layer
+      (dotimes (node-number nodes-in-layer) ; for each node in the layer
+        (vector-push (activate-node (elt (elt network layer-number) node-number) prev-nodes) current-nodes)) ; push the activate-node result to the vector
+      (setf prev-nodes current-nodes)))) ; moving to the next layer. This also returns current-nodes, meaning we don't need a dedicated return statement.
+
+(defun get-activation-list (network input-nodes)
+  "Like activate-network, but returns a list of every activation, including the input-nodes."
+  (let ((activations (list input-nodes)) (prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
+    (dotimes (layer-number (length network) activations)
+      (setf nodes-in-layer (length (elt network layer-number)))
+      (setf current-nodes (map 'list #'activate-node (elt network layer-number) (make-array nodes-in-layer :initial-element prev-nodes))) ; map function is overpowered. no idea how this works
+      (setf activations (append activations (list current-nodes)))
+      (setf prev-nodes current-nodes))))
+
+(defun initialize-network-mono (sizes initializer)
+  "Creates the network of nodes, sets every weight and bias according to the initializer.
+Each layer is formatted as (#(biases) (#(weights1) #(weights2) ...)).
+In other words, it's a list containing a 1D vector and a 2D vector.
+The entire network is a list containing every layer.
+@sizes List of integers describing number of nodes in each layer.
+@initializer Function that initializes value for each weight and bias. Currently using get-one-random."
+  (defparameter *norm-function* #'relu)
+  (let ((sizes-no-input (remove-first sizes)) (network NIL))
+                                        ; NOTE: The input layer does NOT have dedicated node objects, because its values are given by an outside source.
+                                        ; For example, an input layer might be how dark a pixel in an image is, for an image recognition network.
+                                        ; The input layer itself goes through no function. This is why we use remove-first.
+    
+    (dotimes (layer (length sizes-no-input))
+      (let ((layer-size (elt sizes-no-input layer)))
+        (let ((layer-data (make-array layer-size :fill-pointer 0))) ; make an empty vector for the layer. Could have used let* to have this line and the previous in 1 but oh well.
+          (dotimes (current-node layer-size)
+            (vector-push (make-instance 'node ; Makes a new node to put in the vector.
+                                        :prev-node-count (elt sizes layer) ; (elt sizes layer) is equal to (elt sizes-no-input layer) - 1, meaning it's a handy way of accessing the size of the previous layer.
+                                        ; This is necessary to give the nodes input about how many nodes are in the previous layer; for example, how many weights they need.
+                                        :weights (generate-weights initializer (elt sizes layer) 1)
+                                        :outer-params (aops:generate initializer 1))
+                         layer-data))
+          (setf network (append network (list layer-data))))))
+    (return-from initialize-network-mono network)))
+
+
 
 (defun backpropagate (network errors)
   "Goes backwards through the network to find gradients for each weight and bias. Currently unfinished."
