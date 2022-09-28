@@ -96,10 +96,13 @@ but it makes it easier to explain."
   "Replaces all calls to the elt and access-weight functions with a call to the get-one-random function.
 I programmed this while in a call with a bunch of anarchists and it worked on the first try. I don't know why it works. Just go with it."
   (if (not (equal (type-of expression) 'cons)) ; not cons
-      (return-from replace-with-randoms expression))
-  (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'access-weight))
-      (return-from replace-with-randoms (get-one-random))
-      (return-from replace-with-randoms (map 'list #'replace-with-randoms expression))))
+                                        ;for demo purposes only. The following two lines of code are unnecessary for the functioning of the program
+      (if (or (equal expression 'x) (equal expression 'z))
+          (return-from replace-with-randoms (get-one-random))
+          (return-from replace-with-randoms expression)) ;This one is necessary
+      (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'access-weight))
+          (return-from replace-with-randoms (get-one-random))
+          (return-from replace-with-randoms (map 'list #'replace-with-randoms expression)))))
 
 (defun replace-with-accesses (expression n)
   "Replaces all references to prev-node with (elt prev-nodes n), and all instances of (elt weights m) with (access-weight node n m)."
@@ -264,8 +267,9 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                                         ; Finally, norm-function is called on the result of outer-function. This produces the number for the node.
    (node-function :initarg :node-function :initform '(lambda (prev-nodes weights) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))) :accessor node-function
              :documentation "Function for the activation (output) of the node. Called every time the node is activated.")
-   weights-derivatives
-   outer-params-derivatives))
+   (weights-derivatives :accessor weights-derivatives)
+   (outer-params-derivatives :accessor outer-params-derivatives)
+   (prev-nodes-derivatives :accessor prev-nodes-derivatives)))
 
 (defmethod initialize-instance :after ((node node) &key)
                                         ; Loop through the 2D array of weights
@@ -277,7 +281,8 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
           (setf (aref wd-array prev-node weight) prev-node-array))))
     (setf (slot-value node 'weights-derivatives) wd-array)
                                         ; Loop through the 1D array of outer-params
-    (setf (slot-value node 'outer-params-derivatives) (map 'vector #'get-derivative (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))))  
+    (setf (slot-value node 'outer-params-derivatives) (map 'vector #'get-derivative (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))
+    (setf (slot-value node 'prev-nodes-derivatives) (map 'list #'get-derivative (make-array (elt dims 0) :initial-element func) (loop for i upto (elt dims 0) collect `(elt prev-nodes ,i))))))  
 
 (defgeneric activate-node (node prev-nodes)
   )
@@ -345,8 +350,36 @@ The entire network is a list containing every layer.
           (setf network (append network (list layer-data))))))
     (return-from initialize-network-mono network)))
 
-
-
+(defun add-gradients (network activation-list error-list gradient-list)
+  "Goes backwards through the network, computes gradients for each weight and parameter, and adds them to their corresponding spot in gradient-list.
+@network The network being trained.
+@activation-list The list of network activations. Needed for calculating derivatives that use zl or access prev-nodes.
+@error-list The list of delta(cost)/delta(node) for each output node in the network.
+@gradient-list The gradient list to be modified."
+  (let ((layer-data) (layer-size) (current-dcdn error-list) (zl) (prev-nodes) (node))
+                                        ; Goes through the network backwards.
+                                        ; Starts by taking using the cost function derivative formulas.
+    (do ((layer (- (length network) 1) (1- layer))) ((< layer 0))
+      (setf layer-data (elt network layer) layer-size (length layer-data) prev-nodes (elt activation-list layer))
+      (if (< layer (- (length network) 1)) ;not the output layer, we need to compute new delta(cost)/delta(node)
+          (let ((new-dcdn (make-array layer-size :initial-element 0)))
+            (dotimes (node-number (length (elt network (+ 1 layer)))) ; loop through every output in the future layer
+              (setf node (elt (elt network (+ 1 layer)) node-number) zl (eval (get-zl-function (node-function node))))
+              (map-into new-dcdn #'+ new-dcdn (map 'vector #'eval (prev-nodes-derivatives node))))
+            (map-into new-dcdn #'* new-dcdn current-dcdn)
+            (print new-dcdn)
+            (setf current-dcdn new-dcdn)))
+      (dotimes (node-number layer-size) ; Loops through every node in the layer.
+        (setf node (elt layer-data node-number) zl (get-zl-function (node-function node)))
+        
+        
+    ))))
+    
+(defun train (network cost-function descent-rate labeled-data-list)
+  (let ((dcdn-formulas (map 'list #'get-derivative (make-array (length (elt (last network) 0)) :initial-element cost-function) (loop for i upto (length (elt (last network) 0)) collect `(elt activations ,i)))))
+    ; cost-function is typically defined as #'reduce-map f1 f2 activations.
+    
+      
 (defun backpropagate (network errors)
   "Goes backwards through the network to find gradients for each weight and bias. Currently unfinished."
   (let ((layer-size 0) (prev-gradients errors) (current-gradients NIL))
