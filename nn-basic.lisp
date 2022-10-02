@@ -74,11 +74,11 @@ but it makes it easier to explain."
   "Inverse of get-function-name. You put in a function name and it returns the function."
   `(function ,(eval name))) ; the more eval forms you have the better your code is
 
-(defmacro evaluate-lambda-exp (lambda-list lambda-exp)
+(defun evaluate-lambda-exp (lambda-list lambda-exp)
   "Takes in a variable holding a lambda list and another holding a lambda expression, returns a lambda function that uses them.
   Example: a = (x y), b = (+ x y), (evaluate-lambda-exp a b) -> (lambda (x y) (+ x y).
   I'm not sure whether this actually works so it needs more testing."
-  `(lambda ,(eval lambda-list) ,(eval lambda-exp)))
+  (eval `(lambda ,lambda-list ,lambda-exp))))
 
 (defun make-full-vector (object expression)
   "Makes a vector of the length of the given expression with initial-element object. Used as a helper for the map function."
@@ -118,7 +118,7 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
   "Goes through expression until it finds a (reduce-map #'*) function, then returns that function. Returns NIL if no such function is found."
   (if (not (equal (type-of expression) 'cons))
       (return-from get-zl-function)
-      (if (and (equal (elt expression 0) 'reduce-map) (equal (elt expression 1) '#'*))
+      (if (and (equal (elt expression 0) 'reduce-map) (equal (elt expression 1) '#'*)) ; if expression has only one element, it shouldn't be reduce-map, lol
           (return-from get-zl-function expression)
           (let ((map-result (remove NIL (map 'list #'get-zl-function expression))))
             (return-from get-zl-function (if map-result (elt map-result 0) map-result))))))
@@ -260,29 +260,34 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                                         ; #2A((w1alpha w1beta) (w2alpha w2beta) ...)
    (outer-params :initarg :outer-params :initform (error "outer params not provided") :accessor outer-params
                  :documentation "List of params applied to the outer function i.e. not on each weight. Bias and coefficient go here.")
-                                        ; There are a bunch of functions here. This is how the node activation is calculated:
-                                        ; First, inner-function is called on each prev-node activation value; for example, (* weight prev-node).
-                                        ; After that, connecting-function (inner-function-results*) is called to bind together every inner-function result. This might involve adding them up with #'+.
-                                        ; Next, outer-function is called on the result of connecting-function. outer-function is typically pretty simple and looks something like (+ bias connecting-function-result).
-                                        ; Finally, norm-function is called on the result of outer-function. This produces the number for the node.
-   (node-function :initarg :node-function :initform '(lambda (prev-nodes weights) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))) :accessor node-function
+   (node-function :initarg :node-function :initform `(lambda (prev-nodes weights) (reduce-map #'* (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))) :accessor node-function
              :documentation "Function for the activation (output) of the node. Called every time the node is activated.")
-   (weights-derivatives :accessor weights-derivatives)
-   (outer-params-derivatives :accessor outer-params-derivatives)
-   (prev-nodes-derivatives :accessor prev-nodes-derivatives)))
+   (weights-derivatives :accessor weights-derivatives
+                        :documentation "2D array of functions for calculating the derivative of the node with respect to each weight.")
+   (outer-params-derivatives :accessor outer-params-derivatives
+                             :documentation "1D array of functions for calculating the derivative of the node with respect to each outer-param.")
+   (prev-nodes-derivatives :accessor prev-nodes-derivatives
+                           :documentation "List of functions for calculating the derivative of the node with respect to each prev-node.")
+   (zl-function :accessor zl-function
+                :documentation "Formula for the zl, which is anything that involves multiplying together a sequence. We calculate this separately to speed up derivative computation.")))
 
 (defmethod initialize-instance :after ((node node) &key)
-                                        ; Loop through the 2D array of weights
-  (let* ((dims (array-dimensions (weights node))) (func (get-lambda-body (eval (node-function node)))) (wd-array (make-array dims)) (outer-params (outer-params node)))
-    (dotimes (prev-node (elt dims 0))
+  (let* ((dims (array-dimensions (weights node))) (func (get-lambda-body (eval (node-function node)))) (wd-array (make-array dims)) (outer-params (outer-params node)) (zl-function (get-zl-function func))
+         (deriv-lambda-list `(prev-nodes weights outer-params)))
+    (if zl-function (progn (setf deriv-lambda-list (append deriv-lambda-list (list 'zl))) (setf (slot-value node 'zl-function) zl-function)))
+    ; If there is a zl function (the node function uses reduce #'*), then store it in the node, and make sure every derivative formula in the node takes zl as an argument.
+    (dotimes (prev-node (elt dims 0)) ; Loop through the 2D array of weights
       (let ((prev-node-array (make-array (elt dims 1) :fill-pointer 0)))
         (dotimes (weight (elt dims 1))
-          (vector-push (get-derivative func `(access-weight node ,prev-node ,weight)) prev-node-array) ; Take derivative of formula with respect to each weight
-          (setf (aref wd-array prev-node weight) prev-node-array))))
-    (setf (slot-value node 'weights-derivatives) wd-array)
+          (vector-push (evaluate-lambda-exp deriv-lambda-list (get-derivative func `(access-weight node ,prev-node ,weight))) prev-node-array) ; Take derivative of formula with respect to each weight
+          (setf (aref wd-array prev-node weight) prev-node-array)))) ; What is this? What is happening with wd-array vs prev-node-array? Why can we not just delete prev-node-array?
+    (setf (weights-derivatives node) wd-array)
                                         ; Loop through the 1D array of outer-params
-    (setf (slot-value node 'outer-params-derivatives) (map 'vector #'get-derivative (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))
-    (setf (slot-value node 'prev-nodes-derivatives) (map 'list #'get-derivative (make-array (elt dims 0) :initial-element func) (loop for i upto (elt dims 0) collect `(elt prev-nodes ,i))))))  
+    (setf (outer-params-derivatives node) (map 'vector (lambda (func outer-param) (evaluate-lambda-exp deriv-lambda-list (get-derivative func outer-param)))
+                                                           (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))
+    (setf (prev-nodes-derivatives node) (map 'list (lambda (func prev-node) (evaluate-lambda-exp deriv-lambda-list (get-derivative func prev-node)))
+                                             (make-array (elt dims 0) :initial-element func) (loop for i upto (elt dims 0) collect `(elt prev-nodes ,i))))
+    (setf (node-function node) (eval (node-function node)))))
 
 (defgeneric activate-node (node prev-nodes)
   )
@@ -318,7 +323,7 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 (defun get-activation-list (network input-nodes)
   "Like activate-network, but returns a list of every activation, including the input-nodes."
   (let ((activations (list input-nodes)) (prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
-    (dotimes (layer-number (length network) activations)
+    (dotimes (layer-number (length network) activations) ; returns the activations variable at the end of the dotimes
       (setf nodes-in-layer (length (elt network layer-number)))
       (setf current-nodes (map 'list #'activate-node (elt network layer-number) (make-array nodes-in-layer :initial-element prev-nodes))) ; map function is overpowered. no idea how this works
       (setf activations (append activations (list current-nodes)))
@@ -326,8 +331,7 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 
 (defun initialize-network-mono (sizes initializer)
   "Creates the network of nodes, sets every weight and bias according to the initializer.
-Each layer is formatted as (#(biases) (#(weights1) #(weights2) ...)).
-In other words, it's a list containing a 1D vector and a 2D vector.
+Each layer is a list of node objects.
 The entire network is a list containing every layer.
 @sizes List of integers describing number of nodes in each layer.
 @initializer Function that initializes value for each weight and bias. Currently using get-one-random."
@@ -338,17 +342,16 @@ The entire network is a list containing every layer.
                                         ; The input layer itself goes through no function. This is why we use remove-first.
     
     (dotimes (layer (length sizes-no-input))
-      (let ((layer-size (elt sizes-no-input layer)))
-        (let ((layer-data (make-array layer-size :fill-pointer 0))) ; make an empty vector for the layer. Could have used let* to have this line and the previous in 1 but oh well.
-          (dotimes (current-node layer-size)
-            (vector-push (make-instance 'node ; Makes a new node to put in the vector.
-                                        :prev-node-count (elt sizes layer) ; (elt sizes layer) is equal to (elt sizes-no-input layer) - 1, meaning it's a handy way of accessing the size of the previous layer.
+      (let* ((layer-size (elt sizes-no-input layer)) (layer-data (make-array layer-size :fill-pointer 0))) ; Make an empty vector for the layer.
+        (dotimes (current-node layer-size)
+          (vector-push (make-instance 'node ; Makes a new node to put in the vector.
+                                      :prev-node-count (elt sizes layer) ; (elt sizes layer) is equal to (elt sizes-no-input layer) - 1, meaning it's a handy way of accessing the size of the previous layer.
                                         ; This is necessary to give the nodes input about how many nodes are in the previous layer; for example, how many weights they need.
-                                        :weights (generate-weights initializer (elt sizes layer) 1)
-                                        :outer-params (aops:generate initializer 1))
-                         layer-data))
-          (setf network (append network (list layer-data))))))
-    (return-from initialize-network-mono network)))
+                                      :weights (generate-weights initializer (elt sizes layer) 1)
+                                      :outer-params (aops:generate initializer 1))
+                       layer-data))
+        (setf network (append network (list layer-data))))))
+  (return-from initialize-network-mono network))
 
 (defun add-gradients (network activation-list error-list gradient-list)
   "Goes backwards through the network, computes gradients for each weight and parameter, and adds them to their corresponding spot in gradient-list.
@@ -356,7 +359,7 @@ The entire network is a list containing every layer.
 @activation-list The list of network activations. Needed for calculating derivatives that use zl or access prev-nodes.
 @error-list The list of delta(cost)/delta(node) for each output node in the network.
 @gradient-list The gradient list to be modified."
-  (let ((layer-data) (layer-size) (current-dcdn error-list) (zl) (prev-nodes) (node))
+  (let ((layer-data) (layer-size) (current-dcdn error-list) (zl 2) (prev-nodes) (node) (weights))
                                         ; Goes through the network backwards.
                                         ; Starts by taking using the cost function derivative formulas.
     (do ((layer (- (length network) 1) (1- layer))) ((< layer 0))
@@ -364,7 +367,8 @@ The entire network is a list containing every layer.
       (if (< layer (- (length network) 1)) ;not the output layer, we need to compute new delta(cost)/delta(node)
           (let ((new-dcdn (make-array layer-size :initial-element 0)))
             (dotimes (node-number (length (elt network (+ 1 layer)))) ; loop through every output in the future layer
-              (setf node (elt (elt network (+ 1 layer)) node-number) zl (eval (get-zl-function (node-function node))))
+              (setf node (elt (elt network (+ 1 layer)) node-number) weights (weights node) zl (get-zl-function (node-function node)))
+              (print zl)
               (map-into new-dcdn #'+ new-dcdn (map 'vector #'eval (prev-nodes-derivatives node))))
             (map-into new-dcdn #'* new-dcdn current-dcdn)
             (print new-dcdn)
