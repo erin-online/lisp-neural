@@ -74,11 +74,11 @@ but it makes it easier to explain."
   "Inverse of get-function-name. You put in a function name and it returns the function."
   `(function ,(eval name))) ; the more eval forms you have the better your code is
 
-(defun evaluate-lambda-exp (lambda-list lambda-exp)
+(defun evaluate-lambda-exp (lambda-list &rest lambda-body)
   "Takes in a variable holding a lambda list and another holding a lambda expression, returns a lambda function that uses them.
   Example: a = (x y), b = (+ x y), (evaluate-lambda-exp a b) -> (lambda (x y) (+ x y).
   I'm not sure whether this actually works so it needs more testing."
-  (eval `(lambda ,lambda-list ,lambda-exp))))
+  (eval `(lambda ,lambda-list ,@lambda-body)))
 
 (defun make-full-vector (object expression)
   "Makes a vector of the length of the given expression with initial-element object. Used as a helper for the map function."
@@ -97,10 +97,10 @@ but it makes it easier to explain."
 I programmed this while in a call with a bunch of anarchists and it worked on the first try. I don't know why it works. Just go with it."
   (if (not (equal (type-of expression) 'cons)) ; not cons
                                         ;for demo purposes only. The following two lines of code are unnecessary for the functioning of the program
-      (if (or (equal expression 'x) (equal expression 'z))
+      (if (or (equal expression 'x) (equal expression 'z) (equal expression 'zl))
           (return-from replace-with-randoms (get-one-random))
           (return-from replace-with-randoms expression)) ;This one is necessary
-      (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'access-weight))
+      (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'aref))
           (return-from replace-with-randoms (get-one-random))
           (return-from replace-with-randoms (map 'list #'replace-with-randoms expression)))))
 
@@ -111,7 +111,7 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
           (return-from replace-with-accesses `(elt prev-nodes ,n))
           (return-from replace-with-accesses expression)))
   (if (equal (elt expression 0) 'elt)
-      (return-from replace-with-accesses `(access-weight node ,n ,(elt expression 2)))
+      (return-from replace-with-accesses `(aref weights ,n ,(elt expression 2)))
       (return-from replace-with-accesses (map 'list #'replace-with-accesses expression (make-full-vector n expression)))))
 
 (defun get-zl-function (expression)
@@ -133,10 +133,24 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 
 ; PART 3: DERIVATIVES (or: Functional Programming Hell)
 
+(defparameter *derivative-table* NIL)
+
+(defmacro add-one-deriv (x y)
+                                        ; Helper macro for add-derivatives. Adds one function and its derivative to the table.
+  `(progn (setf (gethash ,x *derivative-table*) ,y)
+          (setf (gethash (get-function-name ,x) *derivative-table*) T)))
+
+(defun add-derivatives (&rest args)
+                                        ; Helper function for generate-derivative-table.
+                                        ; Works like setf, taking an even number of arguments. Instead of setting A to B, it sets hash A to value B.
+  (dotimes (binding (/ (length args) 2))
+    (let ((func (elt args (* binding 2))) (deriv (elt args (+ (* binding 2) 1))))
+      (add-one-deriv func deriv))))
+
 (defun generate-derivative-table ()
   "The derivative table is the base for the get-derivative function. It's a lookup table for the most elementary derivatives."
   (defparameter *derivative-table* (make-hash-table)) ; Global hash table. Access this using (gethash [function] *derivative-table*)
-  (add-derivatives *derivative-table*
+  (add-derivatives
                    #'sin #'cos
                    #'cos #'nsin
                    #'exp #'exp
@@ -147,18 +161,6 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                    #'acos #'acosp
                    #'atan #'atanp
                    ))
-
-(defun add-derivatives (*derivative-table* &rest args)
-                                        ; Helper function for generate-derivative-table.
-                                        ; Works like setf, taking an even number of arguments. Instead of setting A to B, it sets hash A to value B.
-  (dotimes (binding (/ (length args) 2))
-    (let ((func (elt args (* binding 2))) (deriv (elt args (+ (* binding 2) 1))))
-      (add-one-deriv *derivative-table* func deriv))))
-
-(defmacro add-one-deriv (*derivative-table* x y)
-                                        ; Helper macro for add-derivatives. Adds one function and its derivative to the table.
-  `(progn (setf (gethash ,x *derivative-table*) ,y)
-          (setf (gethash (get-function-name ,x) *derivative-table*) T)))
 
 (defun get-derivative (func x)
   "Takes in a lambda expression, such as (sin x), and returns a lambda expression corresponding to the function's derivative, such as (cos x).
@@ -173,7 +175,7 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                                         ; The idea of recursive calls to this function is that we can eventually break down the larger atoms by splitting them into first-atom and rest-atoms,
                                         ; splitting something like (sin (cos x)) into sin and (cos x), then going down to (cos x).
   (if (equal func x) (return-from get-derivative 1))
-  (if (or (not (equal (type-of func) 'cons)) (equal (elt func 0) 'access-weight) (equal (elt func 0) 'elt)) ; See below, except if the variable is not in a list
+  (if (or (not (equal (type-of func) 'cons)) (equal (elt func 0) 'aref) (equal (elt func 0) 'elt)) ; See below, except if the variable is not in a list
       (return-from get-derivative 0))
   (if (equal (length func) 1) ; One atom is in the provided lambda expression. This is a variable. If it is not, someone else screwed up.
       (if (equal (elt func 0) x) ; Are we finding the derivative with respect to this variable?
@@ -260,7 +262,8 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                                         ; #2A((w1alpha w1beta) (w2alpha w2beta) ...)
    (outer-params :initarg :outer-params :initform (error "outer params not provided") :accessor outer-params
                  :documentation "List of params applied to the outer function i.e. not on each weight. Bias and coefficient go here.")
-   (node-function :initarg :node-function :initform `(lambda (prev-nodes weights) (reduce-map #'* (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))) :accessor node-function
+   (node-function :initarg :node-function :initform
+                  `(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (* (elt outer-params 1) (reduce-map #'* (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))))) :accessor node-function
              :documentation "Function for the activation (output) of the node. Called every time the node is activated.")
    (weights-derivatives :accessor weights-derivatives
                         :documentation "2D array of functions for calculating the derivative of the node with respect to each weight.")
@@ -272,20 +275,20 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                 :documentation "Formula for the zl, which is anything that involves multiplying together a sequence. We calculate this separately to speed up derivative computation.")))
 
 (defmethod initialize-instance :after ((node node) &key)
+                                        ; This part handles finding the derivative equations for the node.
   (let* ((dims (array-dimensions (weights node))) (func (get-lambda-body (eval (node-function node)))) (wd-array (make-array dims)) (outer-params (outer-params node)) (zl-function (get-zl-function func))
          (deriv-lambda-list `(prev-nodes weights outer-params)))
     (if zl-function (progn (setf deriv-lambda-list (append deriv-lambda-list (list 'zl))) (setf (slot-value node 'zl-function) zl-function)))
-    ; If there is a zl function (the node function uses reduce #'*), then store it in the node, and make sure every derivative formula in the node takes zl as an argument.
+                                        ; If there is a zl function (the node function uses reduce-map #'*), then store it in the node, and make sure every derivative formula in the node takes zl as an argument.
     (dotimes (prev-node (elt dims 0)) ; Loop through the 2D array of weights
-      (let ((prev-node-array (make-array (elt dims 1) :fill-pointer 0)))
-        (dotimes (weight (elt dims 1))
-          (vector-push (evaluate-lambda-exp deriv-lambda-list (get-derivative func `(access-weight node ,prev-node ,weight))) prev-node-array) ; Take derivative of formula with respect to each weight
-          (setf (aref wd-array prev-node weight) prev-node-array)))) ; What is this? What is happening with wd-array vs prev-node-array? Why can we not just delete prev-node-array?
+      (dotimes (weight (elt dims 1))
+        (setf (aref wd-array prev-node weight) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@deriv-lambda-list)) ; This stops the compiler from giving us thousands of lines of warnings (good code alert)
+                                                                    (get-derivative func `(aref weights ,prev-node ,weight)))))) ; Take derivative of formula with respect to each weight
     (setf (weights-derivatives node) wd-array)
-                                        ; Loop through the 1D array of outer-params
-    (setf (outer-params-derivatives node) (map 'vector (lambda (func outer-param) (evaluate-lambda-exp deriv-lambda-list (get-derivative func outer-param)))
-                                                           (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))
-    (setf (prev-nodes-derivatives node) (map 'list (lambda (func prev-node) (evaluate-lambda-exp deriv-lambda-list (get-derivative func prev-node)))
+                                        ; Loop through the 1D array of outer-params, and the list of prev-nodes
+    (setf (outer-params-derivatives node) (map 'vector (lambda (func outer-param) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@deriv-lambda-list)) (get-derivative func outer-param)))
+                                               (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))
+    (setf (prev-nodes-derivatives node) (map 'list (lambda (func prev-node) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@deriv-lambda-list)) (get-derivative func prev-node)))
                                              (make-array (elt dims 0) :initial-element func) (loop for i upto (elt dims 0) collect `(elt prev-nodes ,i))))
     (setf (node-function node) (eval (node-function node)))))
 
@@ -294,8 +297,8 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 
 (defmethod activate-node ((node node) prev-nodes)
   "Takes in a node and a list of outputs in the previous layer. Returns the output (number) for that node."
-  (let ((weights (weights node))) ; Maybe a little unnecessary. This made more sense when we still had the separated function.
-    (funcall (eval (node-function node)) prev-nodes weights)))
+  (let ((weights (weights node)) (outer-params (outer-params node))) ; Maybe a little unnecessary. This made more sense when we still had the separated function.
+    (funcall (node-function node) prev-nodes weights outer-params)))
 
 (defgeneric access-weight (node prev-node-index weight-index)
   )
@@ -348,10 +351,10 @@ The entire network is a list containing every layer.
                                       :prev-node-count (elt sizes layer) ; (elt sizes layer) is equal to (elt sizes-no-input layer) - 1, meaning it's a handy way of accessing the size of the previous layer.
                                         ; This is necessary to give the nodes input about how many nodes are in the previous layer; for example, how many weights they need.
                                       :weights (generate-weights initializer (elt sizes layer) 1)
-                                      :outer-params (aops:generate initializer 1))
+                                      :outer-params (aops:generate initializer 2))
                        layer-data))
-        (setf network (append network (list layer-data))))))
-  (return-from initialize-network-mono network))
+        (setf network (append network (list layer-data)))))
+    (return-from initialize-network-mono network)))
 
 (defun add-gradients (network activation-list error-list gradient-list)
   "Goes backwards through the network, computes gradients for each weight and parameter, and adds them to their corresponding spot in gradient-list.
@@ -381,12 +384,5 @@ The entire network is a list containing every layer.
     
 (defun train (network cost-function descent-rate labeled-data-list)
   (let ((dcdn-formulas (map 'list #'get-derivative (make-array (length (elt (last network) 0)) :initial-element cost-function) (loop for i upto (length (elt (last network) 0)) collect `(elt activations ,i)))))
-    ; cost-function is typically defined as #'reduce-map f1 f2 activations.
-    
-      
-(defun backpropagate (network errors)
-  "Goes backwards through the network to find gradients for each weight and bias. Currently unfinished."
-  (let ((layer-size 0) (prev-gradients errors) (current-gradients NIL))
-    (dolist (layer-data (reverse *network*)) ;for each layer, starting at the end and going backwards. note that layer-data is the actual layer representation in *network*, not the cardinal or size
-      (setf layer-size (length (elt layer-data 0)) current-gradients (make-array layer-size :fill-pointer 0)) ;delta(cost)/delta(current-nodes), for bias/weight gradient calculating in previous layer
-      )))
+    ; cost-function is typically defined as #'reduce-map f1 f2 activations correct-values.
+    ))
