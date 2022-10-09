@@ -146,6 +146,16 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
       (setf glist (append glist (list (map 'list (lambda (node) (list (make-array (array-dimensions (weights node)) :initial-element 0) (make-array (array-dimensions (outer-params node)) :initial-element 0))) layer)))))
     glist))
 
+(defun modify-glist (glist func)
+  "Calls func on every number in the gradient list. Typically this involves multiplying it by a small negative number (descent rate).
+@glist A gradient list. See make-gradient-list and add-gradients.
+@func A function that takes one number as input."
+  (dolist (layer glist)
+    (dolist (node layer)
+      (setf (elt node 0) (aops:each func (elt node 0))) ; weights
+      (map-into (elt node 1) func (elt node 1))))
+  glist)
+
 ; PART 3: DERIVATIVES (or: Functional Programming Hell)
 
 (defparameter *derivative-table* NIL)
@@ -395,12 +405,31 @@ The entire network is a list containing every layer.
                                                      (make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
                                                      (make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
                                                      (make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
-            (map-into new-dcdn #'* new-dcdn current-dcdn)
             (print new-dcdn)
             (setf current-dcdn new-dcdn)))
       (dotimes (node-number layer-size) ; Loops through every node in the layer.
-        (setf node (elt layer-data node-number) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
-        ))))
+        (setf node (elt layer-data node-number) weights (weights node) outer-params (outer-params node) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params))) ;sets up parameters
+        (dotimes (prev-node (array-dimension weights 0)) ; Loops through every weight in the node.
+          (dotimes (weight (array-dimension weights 1))
+            (incf (aref (elt (elt (elt gradient-list layer) node-number) 0) prev-node weight) ; find the correct place in the gradient-list. Lot of lookups, might be more efficient to do a whole node or layer at a time then add it.
+                  (*
+                   (funcall (aref (weights-derivatives node) prev-node weight) prev-nodes weights outer-params zl) ; delta(node)/delta(weight)
+                   (elt current-dcdn node-number))))) ; delta(cost)/delta(node)
+        (dotimes (outer-param (length outer-params)) ; Loops through every outer-param in the node.
+          (incf (elt (elt (elt (elt gradient-list layer) node-number) 1) outer-param) ; works similar to the weight one
+                (*
+                 (funcall (elt (outer-params-derivatives node) outer-param) prev-nodes weights outer-params zl)
+                 (elt current-dcdn node-number)))) ; This elt statement can probably be stored in a variable for more efficiency.
+        ))
+    gradient-list))
+
+(defun apply-glist (network glist)
+  "Adds every element in the gradient list to its corresponding place in the network."
+  (dotimes (layer-number (length network))
+    (dotimes (node-number (length (elt network layer-number)))
+      (let ((node (elt (elt network layer-number) node-number)) (glist-node (elt (elt glist layer-number) node-number)))
+        (setf (weights node) (aops:each #'+ (weights node) (elt glist-node 0)))
+        (setf (outer-params node) (map 'vector #'+ (outer-params node) (elt glist-node 1)))))))
     
 (defun train (network cost-function descent-rate labeled-data-list)
   (let ((dcdn-formulas (map 'list #'get-derivative (make-array (length (elt (last network) 0)) :initial-element cost-function) (loop for i upto (length (elt (last network) 0)) collect `(elt activations ,i)))))
