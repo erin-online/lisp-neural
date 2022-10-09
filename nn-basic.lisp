@@ -276,7 +276,7 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
                              :documentation "1D array of functions for calculating the derivative of the node with respect to each outer-param.")
    (prev-nodes-derivatives :accessor prev-nodes-derivatives
                            :documentation "List of functions for calculating the derivative of the node with respect to each prev-node.")
-   (zl-function :accessor zl-function
+   (zl-function :accessor zl-function :initform NIL
                 :documentation "Formula for the zl, which is anything that involves multiplying together a sequence. We calculate this separately to speed up derivative computation.")))
 
 (defmethod initialize-instance :after ((node node) &key)
@@ -303,8 +303,9 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 
 (defmethod activate-node ((node node) prev-nodes)
   "Takes in a node and a list of outputs in the previous layer. Returns the output (number) for that node."
-  (let ((weights (weights node)) (outer-params (outer-params node))) ; Maybe a little unnecessary. This made more sense when we still had the separated function.
-    (funcall (node-function node) prev-nodes weights outer-params)))
+  (let ((zl NIL))
+    (if (zl-function node) (setf zl (funcall (zl-function node) prev-nodes (weights node) (outer-params node))))
+    (funcall (node-function node) prev-nodes (weights node) (outer-params node) zl)))
 
 (defgeneric access-weight (node prev-node-index weight-index)
   )
@@ -368,25 +369,29 @@ The entire network is a list containing every layer.
 @activation-list The list of network activations. Needed for calculating derivatives that use zl or access prev-nodes.
 @error-list The list of delta(cost)/delta(node) for each output node in the network.
 @gradient-list The gradient list to be modified."
-  (let ((layer-data) (layer-size) (current-dcdn error-list) (zl 2) (prev-nodes) (node) (weights))
+  (let ((layer-data) (layer-size) (current-dcdn error-list) (zl 2) (prev-nodes) (node) (weights) (outer-params))
                                         ; Goes through the network backwards.
                                         ; Starts by taking using the cost function derivative formulas.
-    (do ((layer (- (length network) 1) (1- layer))) ((< layer 0))
+    (do ((layer (- (length network) 1) (1- layer))) ((< layer 0)) ; for each layer
       (setf layer-data (elt network layer) layer-size (length layer-data) prev-nodes (elt activation-list layer))
       (if (< layer (- (length network) 1)) ;not the output layer, we need to compute new delta(cost)/delta(node)
           (let ((new-dcdn (make-array layer-size :initial-element 0)))
             (dotimes (node-number (length (elt network (+ 1 layer)))) ; loop through every output in the future layer
-              (setf node (elt (elt network (+ 1 layer)) node-number) weights (weights node) zl (get-zl-function (node-function node)))
+              (setf prev-nodes (elt activation-list layer)
+                    node (elt (elt network (+ 1 layer)) node-number)
+                    weights (weights node)
+                    outer-params (outer-params node)
+                    zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
               (print zl)
-              (map-into new-dcdn #'+ new-dcdn (map 'vector #'eval (prev-nodes-derivatives node))))
-            (map-into new-dcdn #'* new-dcdn current-dcdn)
-            (print new-dcdn)
-            (setf current-dcdn new-dcdn)))
-      (dotimes (node-number layer-size) ; Loops through every node in the layer.
-        (setf node (elt layer-data node-number) zl (get-zl-function (node-function node)))
-        
-        
-    ))))
+              (let ((len (prev-node-count node)))
+                (map-into new-dcdn #'+ new-dcdn (map 'vector #'funcall (prev-nodes-derivatives node) (make-array len :initial-element prev-nodes)
+                                                     (make-array len :initial-element weights) (make-array len :initial-element outer-params)
+                                                     (make-array len :initial-element zl))))
+              (map-into new-dcdn #'* new-dcdn current-dcdn)
+              (print new-dcdn)
+              (setf current-dcdn new-dcdn)))
+          (dotimes (node-number layer-size) ; Loops through every node in the layer.
+            (setf node (elt layer-data node-number) zl (get-zl-function (node-function node))))))))
     
 (defun train (network cost-function descent-rate labeled-data-list)
   (let ((dcdn-formulas (map 'list #'get-derivative (make-array (length (elt (last network) 0)) :initial-element cost-function) (loop for i upto (length (elt (last network) 0)) collect `(elt activations ,i)))))
