@@ -139,6 +139,13 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
   "Calls (reduce func1) on the result of (map func2 sequences)."
   `(reduce ,func1 (map 'list ,func2 ,@sequences)))
 
+(defun make-gradient-list (network)
+  "Makes a new gradient list with the dimensions of the given network. All values start at 0."
+  (let ((glist NIL))
+    (dolist (layer network)
+      (setf glist (append glist (list (map 'list (lambda (node) (list (make-array (array-dimensions (weights node)) :initial-element 0) (make-array (array-dimensions (outer-params node)) :initial-element 0))) layer)))))
+    glist))
+
 ; PART 3: DERIVATIVES (or: Functional Programming Hell)
 
 (defparameter *derivative-table* NIL)
@@ -384,14 +391,16 @@ The entire network is a list containing every layer.
                     zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
               (print zl)
               (let ((len (prev-node-count node)))
-                (map-into new-dcdn #'+ new-dcdn (map 'vector #'funcall (prev-nodes-derivatives node) (make-array len :initial-element prev-nodes)
-                                                     (make-array len :initial-element weights) (make-array len :initial-element outer-params)
-                                                     (make-array len :initial-element zl))))
-              (map-into new-dcdn #'* new-dcdn current-dcdn)
-              (print new-dcdn)
-              (setf current-dcdn new-dcdn)))
-          (dotimes (node-number layer-size) ; Loops through every node in the layer.
-            (setf node (elt layer-data node-number) zl (get-zl-function (node-function node))))))))
+                (map-into new-dcdn #'+ new-dcdn (map 'vector (lambda (old-dcdn pnd prev-nodes weights outer-params zl) (* old-dcdn (funcall pnd prev-nodes weights outer-params zl)))
+                                                     (make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
+                                                     (make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
+                                                     (make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
+            (map-into new-dcdn #'* new-dcdn current-dcdn)
+            (print new-dcdn)
+            (setf current-dcdn new-dcdn)))
+      (dotimes (node-number layer-size) ; Loops through every node in the layer.
+        (setf node (elt layer-data node-number) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
+        ))))
     
 (defun train (network cost-function descent-rate labeled-data-list)
   (let ((dcdn-formulas (map 'list #'get-derivative (make-array (length (elt (last network) 0)) :initial-element cost-function) (loop for i upto (length (elt (last network) 0)) collect `(elt activations ,i)))))
