@@ -7,7 +7,7 @@
 ; TO-DO:
 ;✓1. Node as an object, represent each layer as a list of nodes. Also, allow for the creation of multiple networks.
 ;✓2. Create an alternative to activate-network that returns the list of activations for every layer, not just the last ones.
-; 3. Finish backpropagation using the function from 2
+;✓3. Finish backpropagation using the function from 2
 ; 4. Work on file I/O for image recognition using data from the MNIST database http://yann.lecun.com/exdb/mnist/. This will result in a basic functioning neural network.
 ; 5. Allow for networks to be imported and exported via files.
 ; 6. Explore xenodes and other ideas
@@ -106,9 +106,13 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 
 (defun replace-with-accesses (expression n)
   "Replaces all references to prev-node with (elt prev-nodes n), and all instances of (elt weights m) with (access-weight node n m)."
-  (if (not (equal (type-of expression) 'cons))
+  (when (not (equal (type-of expression) 'cons))
       (if (equal expression 'prev-node)
-          (return-from replace-with-accesses `(elt prev-nodes ,n))
+          (return-from replace-with-accesses `(elt prev-nodes ,n)))
+      (if (equal expression 'network-output)
+          (return-from replace-with-accesses `(elt network-outputs ,n)))
+      (if (equal expression 'labelled-output)
+          (return-from replace-with-accesses `(elt labelled-outputs ,n)) ; this is obviously garbage, but not putting in the effort for the general case yet
           (return-from replace-with-accesses expression)))
   (if (equal (elt expression 0) 'elt)
       (return-from replace-with-accesses `(aref weights ,n ,(elt expression 2)))
@@ -134,6 +138,10 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 (defmacro locked-lambda (&body body)
   "Lambda function with the arguments locked into (prev-node weights). The user will have to use these arguments in the body."
   `(lambda (prev-node weights) ,@body))
+
+(defmacro cost-lambda (&body body)
+  "Locked lambda for the cost function. Locked into the arguments (labelled-output network-output)."
+  `(lambda (labelled-output network-output) ,@body))
 
 (defmacro reduce-map (func1 func2 &rest sequences)
   "Calls (reduce func1) on the result of (map func2 sequences)."
@@ -328,7 +336,7 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
   )
 
 (defmethod access-weight ((node node) prev-node-index weight-index)
-  ; Helper function so I don't have to constantly use slice-2d-array and elt to access a specific weight.
+  ; Helper function so I don't have to constantly use slice-2d-array and elt to access a specific weight. Obsolete, we now use aref.
   (elt (slice-2d-array (weights node) prev-node-index) weight-index))
 
 (defun generate-weights (initializer prev-node-count weights-per-prev-node)
@@ -431,7 +439,18 @@ The entire network is a list containing every layer.
         (setf (weights node) (aops:each #'+ (weights node) (elt glist-node 0)))
         (setf (outer-params node) (map 'vector #'+ (outer-params node) (elt glist-node 1)))))))
     
-(defun train (network cost-function descent-rate labeled-data-list)
-  (let ((dcdn-formulas (map 'list #'get-derivative (make-array (length (elt (last network) 0)) :initial-element cost-function) (loop for i upto (length (elt (last network) 0)) collect `(elt activations ,i)))))
-    ; cost-function is typically defined as #'reduce-map f1 f2 activations correct-values.
+(defun train (network cost-function descent-rate labelled-inputs labelled-outputs batch-size)
+  "Trains a network on a set of labelled data. Goes through the entire list of data given. Prints stats along the way. Returns the network afterwards.
+@network The network to be trained.
+@cost-function The cost function, typically (reduce-map #'+ (lambda (labelled-output network-output) (* (+ (network-output (* -1 labelled-output))) (+ (network-output (* -1 labelled-output))))) labelled-outputs network-outputs).
+I don't know if this works properly with the get-derivative helper functions so that will have to be tested. Also maybe we will have powers implemented in get-derivative one day.
+@descent-rate The rate at which the weights and outer-params are modified. Must be a negative number. If it's too close to 0 the network will adjust slowly, if too far it will overshoot and you'll get garbage.
+@labelled-inputs 2D vector containing 1D vectors of data to be sent through the input nodes of the network.
+@labelled-outputs 2D vector containing 1D vectors of the desired outputs for said input data.
+@batch-size The number of iterations per batch. After each batch, the network is modified by the gradient list. Small batches cost more computation time and can cause swings in the network if you get outlier data,
+while large batches will obviously take forever to train unless you use a wacky wavy descent function."
+  (let* ((last-layer-length (length (elt (last network) 0)))
+         (dcdn-formulas (map 'list #'get-derivative (make-array last-layer-length) :initial-element cost-function) (loop for i upto last-layer-length) collect `(elt activations ,i))
+         (descent-function (lambda (x) (* x descent-rate)))) ; You can change this or modify the parameters if you want a non-linear descent function
+    
     ))
