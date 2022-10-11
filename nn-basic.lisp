@@ -224,6 +224,8 @@ This is not a very powerful function. It's used mainly for tests on various netw
                    #'atan #'atanp
                    ))
 
+(generate-derivative-table)
+
 (defun get-derivative (func x &optional zl-function)
   "Takes in a lambda expression, such as (sin x), and returns a lambda expression corresponding to the function's derivative, such as (cos x).
   @func The lambda expression.
@@ -394,7 +396,7 @@ This is not a very powerful function. It's used mainly for tests on various netw
       (setf activations (append activations (list current-nodes)))
       (setf prev-nodes current-nodes))))
 
-(defun initialize-network-mono (sizes initializer)
+(defun initialize-network-mono (sizes initializer node-function)
   "Creates the network of nodes, sets every weight and bias according to the initializer.
 Each layer is a list of node objects.
 The entire network is a list containing every layer.
@@ -414,7 +416,7 @@ The entire network is a list containing every layer.
                                         ; This is necessary to give the nodes input about how many nodes are in the previous layer; for example, how many weights they need.
                                       :weights (generate-weights initializer (elt sizes layer) 1)
                                       :outer-params (aops:generate initializer 2)
-                                      :node-function `(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (* (elt outer-params 1) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))))))
+                                      :node-function node-function)
                        layer-data))
         (setf network (append network (list layer-data)))))
     (return-from initialize-network-mono network)))
@@ -491,6 +493,7 @@ while large batches will obviously take forever to train unless you use a wacky 
     (dotimes (datum (aops:nrow labelled-inputs))
       (when (>= batch-counter batch-size) ; batch is finished
         (setf glist (modify-glist glist descent-function)) ; apply descent function to gradient list
+        (print glist)
         (apply-glist network glist) ; apply gradient list to network
         (setf glist (make-gradient-list network)) ; make a new empty gradient list
         (incf epoch-counter)
