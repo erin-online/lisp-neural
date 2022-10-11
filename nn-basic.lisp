@@ -164,6 +164,35 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
       (map-into (elt node 1) func (elt node 1))))
   glist)
 
+(defmethod map-array (array function
+                      &optional (retval (make-array (array-dimensions array)))) ; copied from lisp-stat/numerical-utilities cause they haven't moved it back to aops
+  "Apply FUNCTION to each element of ARRAY
+Return a new array, or write into the optional 3rd argument."
+  (dotimes (i (array-total-size array) retval)
+    (setf (row-major-aref retval i)
+          (funcall function (row-major-aref array i)))))
+
+(defmacro funcall-break-list (func arg-list)
+  `(funcall ,func ,@arg-list))
+
+(defun gen-pattern-random (size func node-spreader arg-count return-count lower-bound upper-bound)
+  "Generates a labelled list of data based on a given function. Calls the function with random numbers between lower-bound and upper-bound.
+This is not a very powerful function. It's used mainly for tests on various networks using extremely basic patterns such as y=x^2.
+@size The amount of data to generate.
+@func The function in question. This cannot take anything besides numbers as input.
+@node-spreader Function that takes in one number and returns a list of numbers, if you want several output nodes. Use #'list for no change.
+@arg-count The number of arguments with which we are calling function. This is how many random numbers we generate for each call.
+@return-count The number of elements in node-spreader's output list. This is how many output nodes are in the network.
+@lower-bound Lower bound for random number generation.
+@upper-bound Upper bound for random number generation."
+  (let* ((generator (evaluate-lambda-exp '() `(+ ,lower-bound (random ,(float (- upper-bound lower-bound)))))) (inputs (aops:generate generator (list size arg-count))) (outputs (make-array (list size return-count))))
+    (dotimes (input size)
+      (let* ((input-nums (loop for i upto (- arg-count 1) collect (aref inputs input i))) (output (funcall node-spreader (eval `(funcall ,func ,@input-nums)))))
+        (dotimes (output-num (length output))
+          (setf (aref outputs input output-num) (elt output output-num)))))
+    (list inputs outputs)))
+            
+
 ; PART 3: DERIVATIVES (or: Functional Programming Hell)
 
 (defparameter *derivative-table* NIL)
@@ -307,21 +336,21 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 (defmethod initialize-instance :after ((node node) &key)
                                         ; This part handles finding the derivative equations for the node.
   (let* ((dims (array-dimensions (weights node))) (func (get-lambda-body (eval (node-function node)))) (wd-array (make-array dims)) (outer-params (outer-params node)) (zl-function (get-zl-function func))
-         (deriv-lambda-list `(prev-nodes weights outer-params)))
+         (deriv-lambda-list `(prev-nodes weights outer-params &optional zl)) (ignorable-list `(prev-nodes weights outer-params zl)))
     (setf func (replace-zl-function func))
-    (when zl-function (setf (slot-value node 'zl-function) (evaluate-lambda-exp deriv-lambda-list zl-function)) (setf deriv-lambda-list (append deriv-lambda-list (list 'zl))))
-                                        ; If there is a zl function (the node function uses reduce-map #'*), then store it in the node, and make sure every derivative formula in the node takes zl as an argument.
+    (when zl-function (setf (slot-value node 'zl-function) (evaluate-lambda-exp deriv-lambda-list zl-function)))
+                                        ; If there is a zl function (the node function uses reduce-map #'*), then store it in the node.
     (dotimes (prev-node (elt dims 0)) ; Loop through the 2D array of weights
       (dotimes (weight (elt dims 1))
-        (setf (aref wd-array prev-node weight) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@deriv-lambda-list)) ; This stops the compiler from giving us thousands of lines of warnings (good code alert)
+        (setf (aref wd-array prev-node weight) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@ignorable-list)) ; This stops the compiler from giving us thousands of lines of warnings (good code alert)
                                                                     (get-derivative func `(aref weights ,prev-node ,weight) zl-function))))) ; Take derivative of formula with respect to each weight
     (setf (weights-derivatives node) wd-array)
                                         ; Loop through the 1D array of outer-params, and the list of prev-nodes
-    (setf (outer-params-derivatives node) (map 'vector (lambda (func outer-param) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@deriv-lambda-list)) (get-derivative func outer-param zl-function)))
+    (setf (outer-params-derivatives node) (map 'vector (lambda (func outer-param) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@ignorable-list)) (get-derivative func outer-param zl-function)))
                                                (make-full-vector func outer-params) (loop for i upto (length outer-params) collect `(elt outer-params ,i))))
-    (setf (prev-nodes-derivatives node) (map 'list (lambda (func prev-node) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@deriv-lambda-list)) (get-derivative func prev-node zl-function)))
+    (setf (prev-nodes-derivatives node) (map 'list (lambda (func prev-node) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@ignorable-list)) (get-derivative func prev-node zl-function)))
                                              (make-array (elt dims 0) :initial-element func) (loop for i upto (elt dims 0) collect `(elt prev-nodes ,i))))
-    (setf (node-function node) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@deriv-lambda-list)) (replace-zl-function func)))))
+    (setf (node-function node) (evaluate-lambda-exp deriv-lambda-list `(declare (ignorable ,@ignorable-list)) (replace-zl-function func)))))
 
 (defgeneric activate-node (node prev-nodes)
   )
@@ -329,8 +358,9 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
 (defmethod activate-node ((node node) prev-nodes)
   "Takes in a node and a list of outputs in the previous layer. Returns the output (number) for that node."
   (let ((zl NIL))
-    (if (zl-function node) (setf zl (funcall (zl-function node) prev-nodes (weights node) (outer-params node))))
-    (funcall (node-function node) prev-nodes (weights node) (outer-params node) zl)))
+    (if (zl-function node) (progn (setf zl (funcall (zl-function node) prev-nodes (weights node) (outer-params node)))
+                                  (funcall (node-function node) prev-nodes (weights node) (outer-params node) zl))
+        (funcall (node-function node) prev-nodes (weights node) (outer-params node)))))
 
 (defgeneric access-weight (node prev-node-index weight-index)
   )
@@ -383,7 +413,8 @@ The entire network is a list containing every layer.
                                       :prev-node-count (elt sizes layer) ; (elt sizes layer) is equal to (elt sizes-no-input layer) - 1, meaning it's a handy way of accessing the size of the previous layer.
                                         ; This is necessary to give the nodes input about how many nodes are in the previous layer; for example, how many weights they need.
                                       :weights (generate-weights initializer (elt sizes layer) 1)
-                                      :outer-params (aops:generate initializer 2))
+                                      :outer-params (aops:generate initializer 2)
+                                      :node-function `(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (* (elt outer-params 1) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1))))))
                        layer-data))
         (setf network (append network (list layer-data)))))
     (return-from initialize-network-mono network)))
@@ -407,13 +438,13 @@ The entire network is a list containing every layer.
                     weights (weights node)
                     outer-params (outer-params node)
                     zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
-              (print zl)
+              ; (print zl)
               (let ((len (prev-node-count node)))
                 (map-into new-dcdn #'+ new-dcdn (map 'vector (lambda (old-dcdn pnd prev-nodes weights outer-params zl) (* old-dcdn (funcall pnd prev-nodes weights outer-params zl)))
                                                      (make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
                                                      (make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
                                                      (make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
-            (print new-dcdn)
+            ; (print new-dcdn)
             (setf current-dcdn new-dcdn)))
       (dotimes (node-number layer-size) ; Loops through every node in the layer.
         (setf node (elt layer-data node-number) weights (weights node) outer-params (outer-params node) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params))) ;sets up parameters
@@ -442,7 +473,7 @@ The entire network is a list containing every layer.
 (defun train (network cost-function descent-rate labelled-inputs labelled-outputs batch-size)
   "Trains a network on a set of labelled data. Goes through the entire list of data given. Prints stats along the way. Returns the network afterwards.
 @network The network to be trained.
-@cost-function The cost function, typically (reduce-map #'+ (lambda (labelled-output network-output) (* (+ (network-output (* -1 labelled-output))) (+ (network-output (* -1 labelled-output))))) labelled-outputs network-outputs).
+@cost-function The cost function, typically (reduce-map #'+ (lambda (labelled-output network-output) (* (+ network-output (* -1 labelled-output)) (+ network-output (* -1 labelled-output)))) labelled-outputs network-outputs).
 I don't know if this works properly with the get-derivative helper functions so that will have to be tested. Also maybe we will have powers implemented in get-derivative one day.
 @descent-rate The rate at which the weights and outer-params are modified. Must be a negative number. If it's too close to 0 the network will adjust slowly, if too far it will overshoot and you'll get garbage.
 @labelled-inputs 2D vector containing 1D vectors of data to be sent through the input nodes of the network.
@@ -450,7 +481,33 @@ I don't know if this works properly with the get-derivative helper functions so 
 @batch-size The number of iterations per batch. After each batch, the network is modified by the gradient list. Small batches cost more computation time and can cause swings in the network if you get outlier data,
 while large batches will obviously take forever to train unless you use a wacky wavy descent function."
   (let* ((last-layer-length (length (elt (last network) 0)))
-         (dcdn-formulas (map 'list #'get-derivative (make-array last-layer-length) :initial-element cost-function) (loop for i upto last-layer-length) collect `(elt activations ,i))
-         (descent-function (lambda (x) (* x descent-rate)))) ; You can change this or modify the parameters if you want a non-linear descent function
-    
-    ))
+         (dcdn-formulas (map 'list #'get-derivative (make-array last-layer-length :initial-element (get-lambda-body cost-function)) (loop for i upto last-layer-length collect `(elt labelled-outputs ,i))))
+         (dcdn-functions (map 'list #'evaluate-lambda-exp (make-array last-layer-length :initial-element '(labelled-outputs network-outputs)) dcdn-formulas))
+         (descent-function (lambda (x) (* x descent-rate))) ; You can change this or modify the parameters if you want a non-linear descent function
+         (batch-counter 0)
+         (epoch-counter 0)
+         (cost-sum 0)
+         (glist (make-gradient-list network)))
+    (dotimes (datum (aops:nrow labelled-inputs))
+      (when (>= batch-counter batch-size) ; batch is finished
+        (setf glist (modify-glist glist descent-function)) ; apply descent function to gradient list
+        (apply-glist network glist) ; apply gradient list to network
+        (setf glist (make-gradient-list network)) ; make a new empty gradient list
+        (incf epoch-counter)
+        (format t "Epoch ~a. Average cost is ~a.~%" epoch-counter (/ cost-sum batch-size))
+        (setf batch-counter 0 cost-sum 0)) ; reset the batch counter
+      (let* ((labelled-input (coerce (slice-2d-array labelled-inputs datum) 'list)) ; awful
+             (network-alist (get-activation-list network labelled-input))
+             (network-outputs (elt (last network-alist) 0)) ; probably not even a good fix this is where the actual training part happens
+             (labelled-output (coerce (slice-2d-array labelled-outputs datum) 'list)))
+        ; (print (get-lambda-body (elt dcdn-functions 0)))
+        ; (print dcdn-functions)
+        ; (print network-outputs)
+        ; (print labelled-output)
+        (incf cost-sum (funcall cost-function labelled-output network-outputs)) 
+        (add-gradients network network-alist
+                       (map 'list (lambda (dcdn-function labelled-outputs network-outputs) (funcall dcdn-function labelled-outputs network-outputs)) dcdn-functions
+                                                  (make-array last-layer-length :initial-element labelled-output)
+                                                  (make-array last-layer-length :initial-element network-outputs))
+                       glist)
+        (incf batch-counter)))))
