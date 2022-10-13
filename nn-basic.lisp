@@ -147,23 +147,6 @@ I programmed this while in a call with a bunch of anarchists and it worked on th
   "Calls (reduce func1) on the result of (map func2 sequences)."
   `(reduce ,func1 (map 'list ,func2 ,@sequences)))
 
-(defun make-gradient-list (network)
-  "Makes a new gradient list with the dimensions of the given network. All values start at 0."
-  (let ((glist NIL))
-    (dolist (layer network)
-      (setf glist (append glist (list (map 'list (lambda (node) (list (make-array (array-dimensions (weights node)) :initial-element 0) (make-array (array-dimensions (outer-params node)) :initial-element 0))) layer)))))
-    glist))
-
-(defun modify-glist (glist func)
-  "Calls func on every number in the gradient list. Typically this involves multiplying it by a small negative number (descent rate).
-@glist A gradient list. See make-gradient-list and add-gradients.
-@func A function that takes one number as input."
-  (dolist (layer glist)
-    (dolist (node layer)
-      (setf (elt node 0) (aops:each func (elt node 0))) ; weights
-      (map-into (elt node 1) func (elt node 1))))
-  glist)
-
 (defmethod map-array (array function
                       &optional (retval (make-array (array-dimensions array)))) ; copied from lisp-stat/numerical-utilities cause they haven't moved it back to aops
   "Apply FUNCTION to each element of ARRAY
@@ -421,6 +404,23 @@ The entire network is a list containing every layer.
         (setf network (append network (list layer-data)))))
     (return-from initialize-network-mono network)))
 
+(defun make-gradient-list (network)
+  "Makes a new gradient list with the dimensions of the given network. All values start at 0."
+  (let ((glist NIL))
+    (dolist (layer network)
+      (setf glist (append glist (list (map 'list (lambda (node) (list (make-array (array-dimensions (weights node)) :initial-element 0) (make-array (array-dimensions (outer-params node)) :initial-element 0))) layer)))))
+    glist))
+
+(defun modify-glist (glist func)
+  "Calls func on every number in the gradient list. Typically this involves multiplying it by a small negative number (descent rate).
+@glist A gradient list. See make-gradient-list and add-gradients.
+@func A function that takes one number as input."
+  (dolist (layer glist)
+    (dolist (node layer)
+      (setf (elt node 0) (aops:each func (elt node 0))) ; weights
+      (map-into (elt node 1) func (elt node 1))))
+  glist)
+
 (defun add-gradients (network activation-list error-list gradient-list)
   "Goes backwards through the network, computes gradients for each weight and parameter, and adds them to their corresponding spot in gradient-list.
 @network The network being trained.
@@ -493,7 +493,7 @@ while large batches will obviously take forever to train unless you use a wacky 
     (dotimes (datum (aops:nrow labelled-inputs))
       (when (>= batch-counter batch-size) ; batch is finished
         (setf glist (modify-glist glist descent-function)) ; apply descent function to gradient list
-        (print glist)
+        ; (print glist)
         (apply-glist network glist) ; apply gradient list to network
         (setf glist (make-gradient-list network)) ; make a new empty gradient list
         (incf epoch-counter)
