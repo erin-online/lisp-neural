@@ -18,6 +18,10 @@
   "Produces a random number between -0.5 and 1. Pretty arbitrary."
   (- (random 1.5) 0.5))
 
+(defun get-one-rational ()
+  "Produces a random number from the set {-1, -0.9, -0.8, ..., 0.8, 0.9, 1}. Not for production code use, more for making testing calculations easier."
+  (* (- (random 21) 10) 0.1)) ; don't use / 10 here because then you get fractions which are really annoying to read
+
 (defun relu (number)
   "ReLU (rectified linear unit). Sets all nodes that would be negative to 0.
 This is done because negative nodes are bad, apparently. Don't really know why,
