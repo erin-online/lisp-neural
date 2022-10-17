@@ -67,8 +67,9 @@ but it makes it easier to explain."
 
 (defun get-lambda-body (func)
   "Gets the lambda body of a function. For example, if you put in (lambda (x) (* 2 x)), the function will output (* 2 x).
-  Watch out for variable name conflicts--variable names are returned as-is."
-  (elt (function-lambda-expression func) 2))
+  Watch out for variable name conflicts--variable names are returned as-is.
+  For multi-line functions, returns only the last form in the body."
+  (elt (last (nth-value 0 (function-lambda-expression func))) 0))
 
 (defun get-function-name (func)
   "Returns the name of a function. Used to convert a function into a symbol."
@@ -358,6 +359,14 @@ This is not a very powerful function. It's used mainly for tests on various netw
   ; Helper function so I don't have to constantly use slice-2d-array and elt to access a specific weight. Obsolete, we now use aref.
   (elt (slice-2d-array (weights node) prev-node-index) weight-index))
 
+(defgeneric print-node (node)
+  )
+
+(defmethod print-node ((node node))
+  "Prints information about a node in a human-readable format."
+  (format t "Weights: ~15t~a~%" (weights node))
+  (format t "Outer params: ~15t~a~%" (outer-params node))) ; i don't know how to cleanly print the node function
+
 (defun generate-weights (initializer prev-node-count weights-per-prev-node)
   "Generates a 2D weights array for a node using the aops library. Sets each weight to the result of a call to the (typically random) initializer function."
   (aops:generate initializer (list prev-node-count weights-per-prev-node)))
@@ -382,6 +391,14 @@ This is not a very powerful function. It's used mainly for tests on various netw
       (setf current-nodes (map 'list #'activate-node (elt network layer-number) (make-array nodes-in-layer :initial-element prev-nodes))) ; map function is overpowered. no idea how this works
       (setf activations (append activations (list current-nodes)))
       (setf prev-nodes current-nodes))))
+
+(defun print-network (network)
+  "Prints information about a network in a human-readable format."
+  (dotimes (layer (length network))
+    (format t "~%LAYER ~a~%" layer)
+    (dotimes (node (length (elt network layer)))
+      (format t "~%Node ~a~%" node)
+      (print-node (elt (elt network layer) node)))))    
 
 (defun initialize-network-mono (sizes initializer node-function)
   "Creates the network of nodes, sets every weight and bias according to the initializer.
@@ -431,6 +448,7 @@ The entire network is a list containing every layer.
 @activation-list The list of network activations. Needed for calculating derivatives that use zl or access prev-nodes.
 @error-list The list of delta(cost)/delta(node) for each output node in the network.
 @gradient-list The gradient list to be modified."
+  ; (format t "~%Error list is ~a." error-list)
   (let ((layer-data) (layer-size) (current-dcdn error-list) (zl 2) (prev-nodes) (node) (weights) (outer-params))
                                         ; Goes through the network backwards.
                                         ; Starts by taking using the cost function derivative formulas.
@@ -450,12 +468,13 @@ The entire network is a list containing every layer.
                                                      (make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
                                                      (make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
                                                      (make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
-            ; (print new-dcdn)
+            ; (format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
             (setf current-dcdn new-dcdn)))
       (dotimes (node-number layer-size) ; Loops through every node in the layer.
         (setf node (elt layer-data node-number) weights (weights node) outer-params (outer-params node) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params))) ;sets up parameters
         (dotimes (prev-node (array-dimension weights 0)) ; Loops through every weight in the node.
           (dotimes (weight (array-dimension weights 1))
+            ; (format t "~%delta(node)/delta(weight) for weight ~a ~a ~a ~a: ~a" layer node-number prev-node weight (funcall (aref (weights-derivatives node) prev-node weight) prev-nodes weights outer-params zl))
             (incf (aref (elt (elt (elt gradient-list layer) node-number) 0) prev-node weight) ; find the correct place in the gradient-list. Lot of lookups, might be more efficient to do a whole node or layer at a time then add it.
                   (*
                    (funcall (aref (weights-derivatives node) prev-node weight) prev-nodes weights outer-params zl) ; delta(node)/delta(weight)
@@ -487,7 +506,8 @@ I don't know if this works properly with the get-derivative helper functions so 
 @batch-size The number of iterations per batch. After each batch, the network is modified by the gradient list. Small batches cost more computation time and can cause swings in the network if you get outlier data,
 while large batches will obviously take forever to train unless you use a wacky wavy descent function."
   (let* ((last-layer-length (length (elt (last network) 0)))
-         (dcdn-formulas (map 'list #'get-derivative (make-array last-layer-length :initial-element (get-lambda-body cost-function)) (loop for i upto last-layer-length collect `(elt labelled-outputs ,i))))
+         (cost-function (eval cost-function)) ; initial cost function will be quoted, otherwise the compiler will not give us access to the body and thus get-derivative
+         (dcdn-formulas (map 'list #'get-derivative (make-array last-layer-length :initial-element (get-lambda-body cost-function)) (loop for i upto last-layer-length collect `(elt network-outputs ,i))))
          (dcdn-functions (map 'list #'evaluate-lambda-exp (make-array last-layer-length :initial-element '(labelled-outputs network-outputs)) dcdn-formulas))
          (descent-function (lambda (x) (* x descent-rate))) ; You can change this or modify the parameters if you want a non-linear descent function
          (batch-counter 0)
@@ -497,20 +517,20 @@ while large batches will obviously take forever to train unless you use a wacky 
     (dotimes (datum (aops:nrow labelled-inputs))
       (when (>= batch-counter batch-size) ; batch is finished
         (setf glist (modify-glist glist descent-function)) ; apply descent function to gradient list
-        ; (print glist)
+        (print glist)
         (apply-glist network glist) ; apply gradient list to network
         (setf glist (make-gradient-list network)) ; make a new empty gradient list
         (incf epoch-counter)
-        (format t "Epoch ~a. Average cost is ~a.~%" epoch-counter (/ cost-sum batch-size))
+        (format t "~%~%Epoch ~a. Average cost is ~a.~%" epoch-counter (/ cost-sum batch-size))
         (setf batch-counter 0 cost-sum 0)) ; reset the batch counter
       (let* ((labelled-input (coerce (slice-2d-array labelled-inputs datum) 'list)) ; awful
              (network-alist (get-activation-list network labelled-input))
              (network-outputs (elt (last network-alist) 0)) ; probably not even a good fix this is where the actual training part happens
              (labelled-output (coerce (slice-2d-array labelled-outputs datum) 'list)))
         ; (print (get-lambda-body (elt dcdn-functions 0)))
-        ; (print dcdn-functions)
-        ; (print network-outputs)
-        ; (print labelled-output)
+                                        ; (print dcdn-functions)
+        (format t "~%Cost for this iteration was ~a.~%" (funcall cost-function labelled-output network-outputs))
+        (format t "When given the input ~a, the network responded with ~a. The correct response was ~a." labelled-input network-outputs labelled-output)
         (incf cost-sum (funcall cost-function labelled-output network-outputs)) 
         (add-gradients network network-alist
                        (map 'list (lambda (dcdn-function labelled-outputs network-outputs) (funcall dcdn-function labelled-outputs network-outputs)) dcdn-functions
