@@ -4,7 +4,7 @@
   (list
    `(lambda (prev-nodes weights outer-params) (relu (+ (elt outer-params 0) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1)))))
    `(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (* (elt outer-params 1) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1)))))
-  ;`(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (reduce-map #'+ (locked-lambda (* (elt weights 0) (sin (* (elt weights 1) prev-node)))) prev-nodes (aops:split weights 1))))
+   `(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (reduce-map #'+ (locked-lambda (* (elt weights 0) (sin (* (elt weights 1) prev-node)))) prev-nodes (aops:split weights 1))))
    `(lambda (prev-nodes weights outer-params) (exp (* (log (elt outer-params 0)) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1)))))))
 
 (defparameter *cf-presets* ; cost function presets

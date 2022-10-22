@@ -14,6 +14,8 @@
 
 ; PART 1: MATH FUNCTIONS
 
+(ql:quickload :array-operations)
+
 (defun get-one-random ()
   "Produces a random number between -0.5 and 1. Pretty arbitrary."
   (- (random 1.5) 0.5))
@@ -88,10 +90,6 @@ but it makes it easier to explain."
 (defun make-full-vector (object expression)
   "Makes a vector of the length of the given expression with initial-element object. Used as a helper for the map function."
   (make-array (length expression) :initial-element object))
-
-(defun remove-first (sequence)
-  "Remove the first item in a sequence. This is basically the best function in the program."
-  (remove (elt sequence 0) sequence :count 1))
 
 (defun remove-nth (sequence index)
   "Remove the nth item in a sequence."
@@ -215,52 +213,36 @@ This is not a very powerful function. It's used mainly for tests on various netw
 (generate-derivative-table)
 
 (defun get-derivative (func x &optional zl-function)
-  "Takes in a lambda expression, such as (sin x), and returns a lambda expression corresponding to the function's derivative, such as (cos x).
-  @func The lambda expression.
-  @x The variable we're finding the derivative with respect to. (x sin(z))' with respect to x is sin(z), but with respect to z it's x cos(z).
+  "Takes in a lambda body, such as (sin x), and returns a lambda body corresponding to the function's derivative, such as (cos x).
+  @func The function to be differentiated.
+  @x The variable we're finding the derivative with respect to. (x * sin(z))' with respect to x is sin(z), but with respect to z it's x * cos(z).
+  @zl-function If the symbol zl is encountered in func, its derivative is defined as the derivative of zl-function. We use this to increase efficiency rather than calculating the same expression multiple times.
   Since each node has many weights and outer-params attached to it, and we need to know the derivative with respect to each one, this is very important."
-                                        ; A note: This function uses "atom" terminology.
-                                        ; I don't know if this is like an official thing or not, I came up with it randomly.
-                                        ; Basically an atom is one of the following things: an elementary function, a variable, or a nested function.
-                                        ; x is an atom, sin is an atom, (sin (cos x)) is an atom.
-                                        ; If this is unintuitive and confusing, sorry. I couldn't think of a better word.
-                                        ; The idea of recursive calls to this function is that we can eventually break down the larger atoms by splitting them into first-atom and rest-atoms,
-                                        ; splitting something like (sin (cos x)) into sin and (cos x), then going down to (cos x).
-  (if (equal func x) (return-from get-derivative 1))
-  (if (equal func 'zl) (return-from get-derivative (get-derivative zl-function x)))
-  (if (or (not (equal (type-of func) 'cons)) (equal (elt func 0) 'aref) (equal (elt func 0) 'elt)) ; See below, except if the variable is not in a list
+  (if (equal func x) (return-from get-derivative 1)) ; derivative of x with respect to x is always 1. This is in here to cover weird forms of x such as elt expressions.
+  (if (equal func 'zl) (return-from get-derivative (get-derivative zl-function x))) ; zl is essentially a mini-function stored in a separate variable. we take the derivative of that when we encounter it
+  (if (or (not (equal (type-of func) 'cons)) (equal (elt func 0) 'aref) (equal (elt func 0) 'elt)) ; func is a symbol not equal to x, return 0
       (return-from get-derivative 0))
-  (if (equal (length func) 1) ; One atom is in the provided lambda expression. This is a variable. If it is not, someone else screwed up.
+  (if (equal (length func) 1) ; func is a list containing 1 symbol. This is a variable.
       (if (equal (elt func 0) x) ; Are we finding the derivative with respect to this variable?
           (return-from get-derivative 1) ; Return 1 if yes
           (return-from get-derivative 0))) ; Return 0 if no (we are keeping this variable constant)
-  (let ((first-atom (elt func 0)) ; The first item in the func list. This is a function, probably.
-                                        ; (second-atom (if (eql (type-of (elt func 1)) 'cons) (elt (elt func 1) 0) (elt func 1)))
-                                        ; I don't know if I need second-atom so I'm keeping it around in comment form
-        
-        (rest-atoms ; The rest of the atoms. Everything except first-atom.
-                                        ; This works but needs to be cleaned up. I commented out Condition 1 in order to let in symbols, to stop the (sin (x)) issue.
-                                        ; Assuming we are using this as a permanent fix (very possible), the comments need to be redone a bit.
-          
-          (if (and t ;eql (type-of (elt (remove-first func) 0)) 'cons) ; Condition 1: The second item in the func list is a cons cell (list).
-                   (< (length func) 3)) ; Condition 2: There are only two items in the func list.
-              (elt (remove-first func) 0) ; These conditions activate when the second atom is a nested function. Removing the first atom gives a nested list that we don't want.
-                                        ; For example, (remove-first (sin (cos x)) will give us ((cos x)). This is silly and dumb. (elt (remove-first func 0)) gets rid of the outer layer.
-              (remove-first func)))) ; If one of the above conditions are false, we set rest-atoms to func with the first item removed.
-                                        ; For more explanation on how this works, see https://media.discordapp.net/attachments/384539353109495818/1017943151299801208/unknown.png?width=980&height=669
+  (let ((func-car (car func)) ; The first item in the func list. This is a function, probably.        
+        (func-cdr ; Everything else in the func list. These will be either variables or nested function calls.
+          (if (< (length func) 3) ; if func contains only 2 elements, a function and a nested function
+              (elt (cdr func) 0) ; We remove the nested list in this case. Otherwise recursive calls get messy e.g. (get-derivative '(sin (cos x)) 'x) -> (get-derivative '((cos x)) 'x) which is just a huge pain.
+              (cdr func)))) ; Otherwise, we set func-cdr to (cdr func) as normal.
     
-    (if (gethash first-atom *derivative-table*)
-                                        ; outermost atom is a function in the derivative table
-        (let ((first-deriv (gethash (eval `(function ,first-atom)) *derivative-table*))) ; looks up the derivative
+    (if (gethash func-car *derivative-table*) ; func-car is a function in the derivative table
+        (let ((first-deriv (gethash (eval `(function ,func-car)) *derivative-table*))) ; Looks up the derivative.
           (return-from get-derivative ; Uses the chain rule.
-            `(* (,(get-function-name first-deriv) ,rest-atoms) ; f'(g(x))
-                ,(get-derivative rest-atoms x zl-function))))) ; g'(x)
-    (if (equal first-atom '+) ; sum
-        (return-from get-derivative `(+ ,@(map 'list #'get-derivative rest-atoms                       ; Use ,@ to break the outer list so we can access the elements using the + function. Reduce doesn't work.
-                                               (make-full-vector x rest-atoms)
-                                               (make-full-vector zl-function rest-atoms)))))                     ; Call get-derivative on each rest-atom, so we need this array of xs to pass into map
-    (if (equal first-atom '*) ; product rule
-        (let* ((factors rest-atoms) (factor-derivs (map 'list #'get-derivative factors (make-full-vector x factors) (make-full-vector zl-function factors))) (indices))
+            `(* (,(get-function-name first-deriv) ,func-cdr) ; f'(g(x))
+                ,(get-derivative func-cdr x zl-function))))) ; g'(x)
+    (if (equal func-car '+) ; sum
+        (return-from get-derivative `(+ ,@(map 'list #'get-derivative func-cdr                       ; Use ,@ to break the outer list so we can access the elements using the + function. Reduce doesn't work.
+                                               (make-full-vector x func-cdr)
+                                               (make-full-vector zl-function func-cdr)))))                     ; Call get-derivative on each rest-atom, so we need this array of xs to pass into map
+    (if (equal func-car '*) ; product rule
+        (let* ((factors func-cdr) (factor-derivs (map 'list #'get-derivative factors (make-full-vector x factors) (make-full-vector zl-function factors))) (indices))
                                         ; Evaluate each item in factor-derivs with a random number inserted in place of all weight calls. Yes, this is unsafe. No, I do not care.
           (dotimes (index (length factors))
             (if (not (= 0 (eval (replace-with-randoms (elt factor-derivs index)))))
@@ -281,12 +263,12 @@ This is not a very powerful function. It's used mainly for tests on various netw
                   (setf plus-value (append plus-value (list `(* ,(elt factor-derivs index) (inv ,(elt factors index)))))))
                 (return-from get-derivative (append return-value (list plus-value)))))))
 
-    (if (equal first-atom 'reduce-map) ; reduce-map function. This can only be used when looping through all the prevnodes.
-                                        ; (elt rest-atoms 1) WILL BE a lambda function that takes prev-node and weights as arguments (see locked-lambda). We can make assumptions based on this.
-        (let ((replaced-func (replace-with-accesses (get-lambda-body (eval (elt rest-atoms 1))) (elt x 2))))
-          (if (equal (elt rest-atoms 0) '#'+) ; adding up a list
+    (if (equal func-car 'reduce-map) ; reduce-map function. This can only be used when looping through all the prevnodes.
+                                        ; (elt rest-atoms 1) WILL BE a locked-lambda or node-lambda function. We can make assumptions based on this.
+        (let ((replaced-func (replace-with-accesses (get-lambda-body (eval (elt func-cdr 1))) (elt x 2))))
+          (if (equal (elt func-cdr 0) '#'+) ; adding up a list
               (return-from get-derivative (get-derivative replaced-func x zl-function)))
-          (if (equal (elt rest-atoms 0) '#'*) ; multiplication (works; kinda weird)
+          (if (equal (elt func-cdr 0) '#'*) ; multiplication (works; kinda weird)
               (return-from get-derivative `(* zl ,(get-derivative replaced-func x zl-function) (inv ,replaced-func))))))))
 
 ; PART 4: NODE OBJECT
@@ -296,7 +278,7 @@ This is not a very powerful function. It's used mainly for tests on various netw
                                         ; The node stores four main things: prev-node-count, weights, outer-params, and function.
 
                                         ; Behavior:
-                                        ; When the network is activated, each node gets passed all the output values from the previous layer of nodes ("prevnodes").
+                                        ; When the network is activated, each node gets passed all the output values from the previous layer of nodes ("prev-nodes").
                                         ; The node then plugs all these values into its function to determine its own output value.
                                         ; TODO: When backpropagation is implemented, the node finds the derivative of every weight compared to the node activation
                                         ; (i.e. if you change the weight by a small amount, what will the comparative change in activation be?)
@@ -376,7 +358,7 @@ This is not a very powerful function. It's used mainly for tests on various netw
 (defun activate-network (network input-nodes)
   "Activates an entire network given a list of input nodes."
   (let ((prev-nodes input-nodes) (current-nodes) (nodes-in-layer))
-    (dotimes (layer-number (length network) current-nodes)
+    (dotimes (layer-number (length network) current-nodes) ; for each layer in the network
       (setf nodes-in-layer (length (elt network layer-number))) ; find how many nodes are in the layer so we can make our vector
       (setf current-nodes (make-array nodes-in-layer :fill-pointer 0)) ; make an empty vector for the current layer
       (dotimes (node-number nodes-in-layer) ; for each node in the layer
@@ -400,14 +382,17 @@ This is not a very powerful function. It's used mainly for tests on various netw
       (format t "~%Node ~a~%" node)
       (print-node (elt (elt network layer) node)))))    
 
-(defun initialize-network-mono (sizes initializer node-function)
+(defun initialize-network-mono (sizes initializer node-function num-weights num-oparams)
   "Creates the network of nodes, sets every weight and bias according to the initializer.
 Each layer is a list of node objects.
 The entire network is a list containing every layer.
 @sizes List of integers describing number of nodes in each layer.
-@initializer Function that initializes value for each weight and bias. Currently using get-one-random."
+@initializer Function that initializes value for each weight and bias. Currently using get-one-random.
+@node-function The function called whenever the node is activated.
+@num-weights How many weights per prev-node. Usually 1.
+@num-oparams How many outer params in each node. Usually 2, bias and coefficient."
   (defparameter *norm-function* #'relu)
-  (let ((sizes-no-input (remove-first sizes)) (network NIL))
+  (let ((sizes-no-input (cdr sizes)) (network NIL))
                                         ; NOTE: The input layer does NOT have dedicated node objects, because its values are given by an outside source.
                                         ; For example, an input layer might be how dark a pixel in an image is, for an image recognition network.
                                         ; The input layer itself goes through no function. This is why we use remove-first.
@@ -418,8 +403,8 @@ The entire network is a list containing every layer.
           (vector-push (make-instance 'node ; Makes a new node to put in the vector.
                                       :prev-node-count (elt sizes layer) ; (elt sizes layer) is equal to (elt sizes-no-input layer) - 1, meaning it's a handy way of accessing the size of the previous layer.
                                         ; This is necessary to give the nodes input about how many nodes are in the previous layer; for example, how many weights they need.
-                                      :weights (generate-weights initializer (elt sizes layer) 1)
-                                      :outer-params (aops:generate initializer 2)
+                                      :weights (generate-weights initializer (elt sizes layer) num-weights)
+                                      :outer-params (aops:generate initializer num-oparams)
                                       :node-function node-function)
                        layer-data))
         (setf network (append network (list layer-data)))))
@@ -464,6 +449,7 @@ The entire network is a list containing every layer.
                     zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
               ; (print zl)
               (let ((len (prev-node-count node)))
+                (print len)
                 (map-into new-dcdn #'+ new-dcdn (map 'vector (lambda (old-dcdn pnd prev-nodes weights outer-params zl) (* old-dcdn (funcall pnd prev-nodes weights outer-params zl)))
                                                      (make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
                                                      (make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
