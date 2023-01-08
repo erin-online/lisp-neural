@@ -442,19 +442,25 @@ The entire network is a list containing every layer.
       (if (< layer (- (length network) 1)) ;not the output layer, we need to compute new delta(cost)/delta(node)
           (let ((new-dcdn (make-array layer-size :initial-element 0)))
             (dotimes (node-number (length (elt network (+ 1 layer)))) ; loop through every output in the future layer
-              (setf prev-nodes (elt activation-list layer)
+              (setf prev-nodes (elt activation-list (+ 1 layer))
                     node (elt (elt network (+ 1 layer)) node-number)
                     weights (weights node)
                     outer-params (outer-params node)
                     zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
               ; (print zl)
               (let ((len (prev-node-count node)))
-                (print len)
-                (map-into new-dcdn #'+ new-dcdn (map 'vector (lambda (old-dcdn pnd prev-nodes weights outer-params zl) (* old-dcdn (funcall pnd prev-nodes weights outer-params zl)))
-                                                     (make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
-                                                     (make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
-                                                     (make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
-            ; (format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
+                ; (print len)
+                ; (print (map 'list #'get-lambda-body (prev-nodes-derivatives node)))
+                (map-into new-dcdn #'+ new-dcdn (loop for i upto (- len 1) collect (* (elt current-dcdn node-number) (funcall (elt (prev-nodes-derivatives node) i) prev-nodes weights outer-params zl))))))
+                                        ; First, start with the current new-dcdn values.
+                                        ; Then, call each prev-nodes-derivative of the selected future node.
+                                        ; Finally, add this list of derivative calculations to new-dcdn.
+
+                          ;(map 'vector (lambda (old-dcdn pnd prev-nodes weights outer-params zl) (* old-dcdn (funcall pnd prev-nodes weights outer-params zl)))
+                                                     ;(make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
+                                                     ;(make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
+                                                     ;(make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
+            (format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
             (setf current-dcdn new-dcdn)))
       (dotimes (node-number layer-size) ; Loops through every node in the layer.
         (setf node (elt layer-data node-number) weights (weights node) outer-params (outer-params node) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params))) ;sets up parameters
@@ -503,7 +509,7 @@ while large batches will obviously take forever to train unless you use a wacky 
     (dotimes (datum (aops:nrow labelled-inputs))
       (when (>= batch-counter batch-size) ; batch is finished
         (setf glist (modify-glist glist descent-function)) ; apply descent function to gradient list
-        (print glist)
+        ; (print glist)
         (apply-glist network glist) ; apply gradient list to network
         (setf glist (make-gradient-list network)) ; make a new empty gradient list
         (incf epoch-counter)
