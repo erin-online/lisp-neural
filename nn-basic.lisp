@@ -22,7 +22,7 @@
 
 (defun get-one-rational ()
   "Produces a random number from the set {-1, -0.9, -0.8, ..., 0.8, 0.9, 1}. Not for production code use, more for making testing calculations easier."
-  (* (- (random 21) 10) 0.1)) ; don't use / 10 here because then you get fractions which are really annoying to read
+  (* (- (random 20) 10) 0.1)) ; don't use / 10 here because then you get fractions which are really annoying to read
 
 (defun relu (number)
   "ReLU (rectified linear unit). Sets all nodes that would be negative to 0.
@@ -98,12 +98,13 @@ but it makes it easier to explain."
 (defun replace-with-randoms (expression)
   "Replaces all calls to the elt and access-weight functions with a call to the get-one-random function.
 I programmed this while in a call with a bunch of anarchists and it worked on the first try. I don't know why it works. Just go with it."
-  (if (not (equal (type-of expression) 'cons)) ; not cons
-                                        ;for demo purposes only. The following two lines of code are unnecessary for the functioning of the program
+  (if (not (equal (type-of expression) 'cons)) ; we are working with a symbol
+                                        ; x and z are for demo purposes only
       (if (or (equal expression 'x) (equal expression 'z) (equal expression 'zl))
           (return-from replace-with-randoms (get-one-random))
-          (return-from replace-with-randoms expression)) ;This one is necessary
-      (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'aref))
+          (return-from replace-with-randoms expression))
+      ; we are working with a list
+      (if (or (equal (elt expression 0) 'elt) (equal (elt expression 0) 'aref) (equal (elt expression 0) 'reduce-map))
           (return-from replace-with-randoms (get-one-random))
           (return-from replace-with-randoms (map 'list #'replace-with-randoms expression)))))
 
@@ -244,6 +245,8 @@ This is not a very powerful function. It's used mainly for tests on various netw
     (if (equal func-car '*) ; product rule
         (let* ((factors func-cdr) (factor-derivs (map 'list #'get-derivative factors (make-full-vector x factors) (make-full-vector zl-function factors))) (indices))
                                         ; Evaluate each item in factor-derivs with a random number inserted in place of all weight calls. Yes, this is unsafe. No, I do not care.
+          ; (print factors)
+          ; (print factor-derivs)
           (dotimes (index (length factors))
             (if (not (= 0 (eval (replace-with-randoms (elt factor-derivs index)))))
                 (setf indices (append indices (list index))))) ; Keep the index of every evaluation that isn't 0
@@ -447,7 +450,7 @@ The entire network is a list containing every layer.
                     weights (weights node)
                     outer-params (outer-params node)
                     zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params)))
-              ; (print zl)
+              ;(print zl)
               (let ((len (prev-node-count node)))
                 ; (print len)
                 ; (print (map 'list #'get-lambda-body (prev-nodes-derivatives node)))
@@ -460,7 +463,7 @@ The entire network is a list containing every layer.
                                                      ;(make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
                                                      ;(make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
                                                      ;(make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
-            (format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
+            ; (format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
             (setf current-dcdn new-dcdn)))
       (dotimes (node-number layer-size) ; Loops through every node in the layer.
         (setf node (elt layer-data node-number) weights (weights node) outer-params (outer-params node) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params))) ;sets up parameters

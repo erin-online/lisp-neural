@@ -1,16 +1,22 @@
                                         ; Interface file meant for use by the user of the program to generate their own custom neural networks.
                                         ; Maybe in the future an in-program interface, perhaps with some sort of GUI, can be considered.
+(ql:quickload :array-operations)
+
 (defparameter *nf-presets* ; node function presets
   (list
    `(lambda (prev-nodes weights outer-params) (relu (+ (elt outer-params 0) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1)))))
    `(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (* (elt outer-params 1) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1)))))
    `(lambda (prev-nodes weights outer-params) (+ (elt outer-params 0) (reduce-map #'+ (locked-lambda (* (elt weights 0) (sin (* (elt weights 1) prev-node)))) prev-nodes (aops:split weights 1))))
-   `(lambda (prev-nodes weights outer-params) (exp (* (log (elt outer-params 0)) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1)))))
-   `(lambda (prev-nodes weights outer-params) (relu (+ (elt outer-params 0) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0) (elt weights 1))) prev-nodes (aops:split weights 1)))))))
+   `(lambda (prev-nodes weights outer-params) (* (elt outer-params 0) (exp (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0))) prev-nodes (aops:split weights 1)))))
+   `(lambda (prev-nodes weights outer-params) (relu (+ (elt outer-params 0) (reduce-map #'+ (locked-lambda (* prev-node (elt weights 0) (elt weights 1))) prev-nodes (aops:split weights 1)))))
+   `(lambda (prev-nodes weights outer-params) (* (elt outer-params 0) (reduce-map #'* (locked-lambda (* (elt weights 1) (atan (* (elt weights 0) prev-node)))) prev-nodes (aops:split weights 1))))))
 
 (defparameter *cf-presets* ; cost function presets
   (list
    `(lambda (labelled-outputs network-outputs) (reduce-map #'+ (cost-lambda (* (+ network-output (* -1 labelled-output)) (+ network-output (* -1 labelled-output)))) labelled-outputs network-outputs))))
+
+(dotimes (i (length *nf-presets*)) (eval `(defparameter ,(read-from-string (concatenate 'string "*nf" (write-to-string i) "*")) ,(elt *nf-presets* i))))
+(dotimes (i (length *cf-presets*)) (eval `(defparameter ,(read-from-string (concatenate 'string "*cf" (write-to-string i) "*")) ,(elt *cf-presets* i))))
 
 (defun make-net (sizes node-function)
   "Makes a network with size specified by sizes. For example, entering '(4 5 6) into the sizes field will give a network with 4 input nodes, 5 middle nodes, and 6 output nodes.
