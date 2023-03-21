@@ -490,7 +490,7 @@ The entire network is a list containing every layer.
         (setf (weights node) (aops:each #'+ (weights node) (elt glist-node 0)))
         (setf (outer-params node) (map 'vector #'+ (outer-params node) (elt glist-node 1)))))))
     
-(defun train (network cost-function descent-rate labelled-inputs labelled-outputs batch-size)
+(defun train (network cost-function descent-rate labelled-inputs labelled-outputs batch-size batches)
   "Trains a network on a set of labelled data. Goes through the entire list of data given. Prints stats along the way. Returns the network afterwards.
 @network The network to be trained.
 @cost-function The cost function, typically (reduce-map #'+ (lambda (labelled-output network-output) (* (+ network-output (* -1 labelled-output)) (+ network-output (* -1 labelled-output)))) labelled-outputs network-outputs).
@@ -508,8 +508,9 @@ while large batches will obviously take forever to train unless you use a wacky 
          (batch-counter 0)
          (epoch-counter 0)
          (cost-sum 0)
-         (glist (make-gradient-list network)))
-    (dotimes (datum (aops:nrow labelled-inputs))
+         (glist (make-gradient-list network))
+         (dataset-size (array-dimension labelled-inputs 0)))
+    (dotimes (datum-count (* batch-size batches))
       (when (>= batch-counter batch-size) ; batch is finished
         (setf glist (modify-glist glist descent-function)) ; apply descent function to gradient list
         ; (print glist)
@@ -518,7 +519,8 @@ while large batches will obviously take forever to train unless you use a wacky 
         (incf epoch-counter)
         (format t "~%~%Epoch ~a. Average cost is ~a.~%" epoch-counter (/ cost-sum batch-size))
         (setf batch-counter 0 cost-sum 0)) ; reset the batch counter
-      (let* ((labelled-input (coerce (slice-2d-array labelled-inputs datum) 'list)) ; awful
+      (let* ((datum (random dataset-size))
+             (labelled-input (coerce (slice-2d-array labelled-inputs datum) 'list)) ; awful
              (network-alist (get-activation-list network labelled-input))
              (network-outputs (elt (last network-alist) 0)) ; probably not even a good fix this is where the actual training part happens
              (labelled-output (coerce (slice-2d-array labelled-outputs datum) 'list)))
