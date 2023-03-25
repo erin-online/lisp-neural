@@ -441,7 +441,7 @@ The entire network is a list containing every layer.
                                         ; Goes through the network backwards.
                                         ; Starts by taking using the cost function derivative formulas.
     (do ((layer (- (length network) 1) (1- layer))) ((< layer 0)) ; for each layer
-      (setf layer-data (elt network layer) layer-size (length layer-data) prev-nodes (elt activation-list layer))
+      (setf layer-data (elt network layer) layer-size (length layer-data))
       (if (< layer (- (length network) 1)) ;not the output layer, we need to compute new delta(cost)/delta(node)
           (let ((new-dcdn (make-array layer-size :initial-element 0)))
             (dotimes (node-number (length (elt network (+ 1 layer)))) ; loop through every output in the future layer
@@ -465,6 +465,7 @@ The entire network is a list containing every layer.
                                                      ;(make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
             ; (format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
             (setf current-dcdn new-dcdn)))
+      (setf prev-nodes (elt activation-list layer))
       (dotimes (node-number layer-size) ; Loops through every node in the layer.
         (setf node (elt layer-data node-number) weights (weights node) outer-params (outer-params node) zl (if (zl-function node) (funcall (zl-function node) prev-nodes weights outer-params))) ;sets up parameters
         (dotimes (prev-node (array-dimension weights 0)) ; Loops through every weight in the node.
