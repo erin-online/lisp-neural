@@ -23,7 +23,7 @@
 The node-function determines the output value of the node, given an input of a prev-node list. We have several presets here, which you can access using (elt *nf-presets* n) where n is between 0 and 2."
   (initialize-network-mono sizes #'get-one-random node-function))
 
-(defun train-on-generated-data (network cost-function descent-rate batch-size batches generating-function)
+(defun train-on-generated-data (network cost-function descent-rate batch-size batches generating-function &optional (min -5) (max 5))
   "Trains a network on procedurally generated data based on a function.
 Basically, we have a simple function that takes in one number argument, such as sin or exp. You can also make your own with lambda.
 We then send 50 random numbers between -5 and 5 into this function, saving both the inputs and outputs, then train the network on this data.
@@ -35,7 +35,7 @@ cost-function takes in a list of correct outputs and a list of the network's out
 descent-rate is how much the network is modified after each batch. Must be negative to make sense. Don't make this too far from 0 or funny things will happen. (More then they already do of course.)
 batch-size is how many times you run the network before modifying it. Each batch has a gradient list that accumulates as more gradients are computed. The higher this is, the closer to 0 descent-rate must be.
 generating-function is a function that takes in a number and spits out a number. The role of this is described in the first paragraph."
-  (let ((data (gen-pattern-random 50 generating-function 'list 1 1 -5 5)))
+  (let ((data (gen-pattern-random 50 generating-function 'list 1 1 min max)))
     (train network cost-function descent-rate (elt data 0) (elt data 1) batch-size batches)))
 
                                         ; don't mind me, just keeping these around for testing

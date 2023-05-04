@@ -17,19 +17,17 @@
 (ql:quickload :array-operations)
 
 (defun get-one-random ()
-  "Produces a random number between -0.5 and 1. Pretty arbitrary."
-  (- (random 1.5) 0.5))
+  "Produces a random number between 0 and 1. Pretty arbitrary."
+  (random 1.0))
+  ;(- (random 1.5) 0.5))
 
 (defun get-one-rational ()
   "Produces a random number from the set {-1, -0.9, -0.8, ..., 0.8, 0.9, 1}. Not for production code use, more for making testing calculations easier."
   (* (- (random 20) 10) 0.1)) ; don't use / 10 here because then you get fractions which are really annoying to read
 
 (defun relu (number)
-  "ReLU (rectified linear unit). Sets all nodes that would be negative to 0.
-This is done because negative nodes are bad, apparently. Don't really know why,
-I think they seem cool. Probably don't need a separate function for this
-but it makes it easier to explain."
-  (max 0 number))
+  "ReLU (rectified linear unit). Equal to x if x>0, or 0.01x otherwise."
+  (if (> number 0) number (* number 0.01)))
 
 (defun nsin (number)
   "Negative sin. Defined as the derivative of (cos x)."
@@ -44,8 +42,8 @@ but it makes it easier to explain."
   (* -1 (expt number -2)))
 
 (defun sgn (number)
-  "Modified signum. 0 if x<=0, 1 if x>0. Defined as the derivative of (relu x)."
-  (if (> number 0) 1 0))
+  "Modified signum. 0.01 if x<=0, 1 if x>0. Defined as the derivative of (relu x)."
+  (if (> number 0) 1 0.01))
 
 (defun asinp (number)
   "Arcsine prime. 1/sqrt(1-x^2). Defined as the derivative of (asin x)."
@@ -463,7 +461,7 @@ The entire network is a list containing every layer.
                                                      ;(make-array len :initial-element (elt current-dcdn node-number)) (prev-nodes-derivatives node)
                                                      ;(make-array len :initial-element prev-nodes) (make-array len :initial-element weights)
                                                      ;(make-array len :initial-element outer-params) (make-array len :initial-element zl))))) ;this is kind of terrible. should be replaced with loop statement
-            ; (format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
+            ;(format t "~%delta(cost)/delta(node) for layer ~a: ~a" layer new-dcdn)
             (setf current-dcdn new-dcdn)))
       (setf prev-nodes (elt activation-list layer))
       (dotimes (node-number layer-size) ; Loops through every node in the layer.
@@ -491,7 +489,7 @@ The entire network is a list containing every layer.
         (setf (weights node) (aops:each #'+ (weights node) (elt glist-node 0)))
         (setf (outer-params node) (map 'vector #'+ (outer-params node) (elt glist-node 1)))))))
     
-(defun train (network cost-function descent-rate labelled-inputs labelled-outputs batch-size batches)
+(defun train (network cost-function descent-rate labelled-inputs labelled-outputs batch-size batches &optional (verbose 0))
   "Trains a network on a set of labelled data. Goes through the entire list of data given. Prints stats along the way. Returns the network afterwards.
 @network The network to be trained.
 @cost-function The cost function, typically (reduce-map #'+ (lambda (labelled-output network-output) (* (+ network-output (* -1 labelled-output)) (+ network-output (* -1 labelled-output)))) labelled-outputs network-outputs).
@@ -505,7 +503,7 @@ while large batches will obviously take forever to train unless you use a wacky 
          (cost-function (eval cost-function)) ; initial cost function will be quoted, otherwise the compiler will not give us access to the body and thus get-derivative
          (dcdn-formulas (map 'list #'get-derivative (make-array last-layer-length :initial-element (get-lambda-body cost-function)) (loop for i upto last-layer-length collect `(elt network-outputs ,i))))
          (dcdn-functions (map 'list #'evaluate-lambda-exp (make-array last-layer-length :initial-element '(labelled-outputs network-outputs)) dcdn-formulas))
-         (descent-function (lambda (x) (* x descent-rate))) ; You can change this or modify the parameters if you want a non-linear descent function
+         (descent-function (lambda (x) (* x descent-rate (/ 1 batch-size)))) ; You can change this or modify the parameters if you want a non-linear descent function
          (batch-counter 0)
          (epoch-counter 0)
          (cost-sum 0)
@@ -514,11 +512,11 @@ while large batches will obviously take forever to train unless you use a wacky 
     (dotimes (datum-count (* batch-size batches))
       (when (>= batch-counter batch-size) ; batch is finished
         (setf glist (modify-glist glist descent-function)) ; apply descent function to gradient list
-        ; (print glist)
+        (if (> verbose 2) (print glist))
         (apply-glist network glist) ; apply gradient list to network
         (setf glist (make-gradient-list network)) ; make a new empty gradient list
         (incf epoch-counter)
-        (format t "~%~%Epoch ~a. Average cost is ~a.~%" epoch-counter (/ cost-sum batch-size))
+        (if (> verbose 0) (format t "~%~%Epoch ~a. Average cost is ~a.~%" epoch-counter (/ cost-sum batch-size)))
         (setf batch-counter 0 cost-sum 0)) ; reset the batch counter
       (let* ((datum (random dataset-size))
              (labelled-input (coerce (slice-2d-array labelled-inputs datum) 'list)) ; awful
@@ -527,8 +525,8 @@ while large batches will obviously take forever to train unless you use a wacky 
              (labelled-output (coerce (slice-2d-array labelled-outputs datum) 'list)))
         ; (print (get-lambda-body (elt dcdn-functions 0)))
                                         ; (print dcdn-functions)
-        (format t "~%Cost for this iteration was ~a.~%" (funcall cost-function labelled-output network-outputs))
-        (format t "When given the input ~a, the network responded with ~a. The correct response was ~a." labelled-input network-outputs labelled-output)
+        (if (> verbose 1) (format t "~%Cost for this iteration was ~a.~%" (funcall cost-function labelled-output network-outputs)))
+        (if (> verbose 0) (format t "When given the input ~a, the network responded with ~a. The correct response was ~a." labelled-input network-outputs labelled-output))
         (incf cost-sum (funcall cost-function labelled-output network-outputs)) 
         (add-gradients network network-alist
                        (map 'list (lambda (dcdn-function labelled-outputs network-outputs) (funcall dcdn-function labelled-outputs network-outputs)) dcdn-functions
