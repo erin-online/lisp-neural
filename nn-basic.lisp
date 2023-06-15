@@ -19,8 +19,21 @@
 (defun get-one-random ()
   "Produces a random number between 0 and 1. Pretty arbitrary."
   (random 1.0))
-  ;(- (random 1.5) 0.5))
+					;(- (random 1.5) 0.5))
 
+(defun poly-initializer (prev-node-count num-weights num-oparams)
+  (let ((total 0) (weights (make-array (list prev-node-count num-weights) :initial-element 0)) (oparams (make-array num-oparams :fill-pointer 0)))
+    (dotimes (weight (* prev-node-count num-weights))
+      (let* ((num (- (random 2.0) 1.0)) (multi (random 0.6)) (chosen (+ num (* -1 total multi))))
+	(incf total chosen)
+	; (format t "Modifying ~a and ~a." (floor (/ weight num-weights)) (mod weight num-weights))
+	(setf (aref weights (floor (/ weight num-weights)) (mod weight num-weights)) chosen)))
+    (dotimes (oparam num-oparams)
+      (let* ((num (- (random 2.0) 1.0)) (multi (random 0.6)) (chosen (+ num (* -1 total multi))))
+	(incf total chosen)
+	(vector-push chosen oparams)))
+    (return-from poly-initializer (list weights oparams))))
+	     
 (defun get-one-rational ()
   "Produces a random number from the set {-1, -0.9, -0.8, ..., 0.8, 0.9, 1}. Not for production code use, more for making testing calculations easier."
   (* (- (random 20) 10) 0.1)) ; don't use / 10 here because then you get fractions which are really annoying to read
@@ -410,6 +423,24 @@ The entire network is a list containing every layer.
                        layer-data))
         (setf network (append network (list layer-data)))))
     (return-from initialize-network-mono network)))
+
+(defun initialize-network-poly (sizes initializer node-function num-weights num-oparams)
+  "Similar to initialize-network-mono. Key difference is the initializer.
+This initializer takes in the number of params, and returns 2 vectors: 1 corresponding to the weights, 1 for the outer-params.
+Thus, each weight and outer-param is not generated independently and you have more control over it."
+  (let ((sizes-no-input (cdr sizes)) (network NIL))
+    (dotimes (layer (length sizes-no-input))
+      (let* ((layer-size (elt sizes-no-input layer)) (layer-data (make-array layer-size :fill-pointer 0)))
+	(dotimes (current-node layer-size)
+	  (let ((params (funcall initializer (elt sizes layer) num-weights num-oparams)))
+	    (vector-push (make-instance 'node
+					:prev-node-count (elt sizes layer)
+					:weights (elt params 0)
+					:outer-params (elt params 1)
+					:node-function node-function)
+			 layer-data)))
+	(setf network (append network (list layer-data)))))
+    (return-from initialize-network-poly network)))
 
 (defun make-gradient-list (network)
   "Makes a new gradient list with the dimensions of the given network. All values start at 0."
