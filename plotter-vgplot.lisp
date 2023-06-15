@@ -1,0 +1,6 @@
+(defun draw-one (title network original-fun &optional (min 0) (max 5) (step 0.01))
+  (let* ((x-range (vgplot:range min max step))
+	(original-function (map 'vector original-fun x-range))
+	(network-approximation (map 'vector (lambda (x) (elt (activate-network network (list x)) 0)) x-range)))
+    (vgplot:plot x-range original-function "b;Original Function;" x-range network-approximation "r;Network Approximation;")
+    (vgplot:title title)))
