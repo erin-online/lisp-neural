@@ -1,4 +1,4 @@
-; Basic neural network intended for simple image recognition.
+; Basic neural network intended for simple purposes.
 ; Doesn't work with stuff like chess because I haven't figured that out yet.
 ; Chess is hard and neural networks are hard.
 ;
@@ -8,20 +8,22 @@
 ;✓1. Node as an object, represent each layer as a list of nodes. Also, allow for the creation of multiple networks.
 ;✓2. Create an alternative to activate-network that returns the list of activations for every layer, not just the last ones.
 ;✓3. Finish backpropagation using the function from 2
-; 4. Work on file I/O for image recognition using data from the MNIST database http://yann.lecun.com/exdb/mnist/. This will result in a basic functioning neural network.
+;✓4. Work on file I/O for image recognition using data from the MNIST database http://yann.lecun.com/exdb/mnist/. This will result in a basic functioning neural network.
 ; 5. Allow for networks to be imported and exported via files.
-; 6. Explore xenodes and other ideas
+;✓6. Explore xenodes and other ideas
 
-; PART 1: MATH FUNCTIONS
-
-(ql:quickload :array-operations)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+					; PART 1: MATH FUNCTIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun get-one-random ()
-  "Produces a random number between 0 and 1. Pretty arbitrary."
-  (random 1.0))
-					;(- (random 1.5) 0.5))
+  "Produces a random number between -0.5 and 0.5. Pretty arbitrary."
+  (- (random 1.0) 0.5))
 
 (defun poly-initializer (prev-node-count num-weights num-oparams)
+  ; this isn't really a math function but it's used for similar purposes to get-one-random
   (let ((total 0) (weights (make-array (list prev-node-count num-weights) :initial-element 0)) (oparams (make-array num-oparams :fill-pointer 0)))
     (dotimes (weight (* prev-node-count num-weights))
       (let* ((num (- (random 2.0) 1.0)) (multi (random 0.6)) (chosen (+ num (* -1 total multi))))
@@ -43,12 +45,20 @@
   (if (> number 0) number (* number 0.01)))
 
 (defun nsin (number)
-  "Negative sin. Defined as the derivative of (cos x)."
+  "Negative sine. Defined as the derivative of (cos x)."
   (* -1 (sin number)))
+
+(defun ncos (number)
+  "Negative cosine. Defined as the derivative of (nsin x)."
+  (* -1 (cos number)))
 
 (defun inv (number)
   "1/x. Defined as the derivative of (log x)."
   (/ 1 number))
+
+(defun sq (number)
+  "Square; x^2. No derivative as this is just for shorthand demo purposes. Use exp for power functions."
+  (expt number 2))
 
 (defun nis (number)
   "Negative inverse square; -1/x^2. Defined as the derivative of (inv x)."
@@ -70,7 +80,15 @@
   "Arctangent prime. 1/(1+x^2). Defined as the derivative of (atan x)."
   (inv (+ 1 (expt number 2))))
 
-; PART 2: HELPER FUNCTIONS
+(defun tanhp (number)
+  "Hyperbolic tangent prime. sech^2(x)."
+  (expt (cosh number) -2))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+					; PART 2: HELPER FUNCTIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun slice-2d-array (array index)
   "Returns the 1D array at the specified index of a 2D array."
@@ -94,7 +112,7 @@
 
 (defun evaluate-lambda-exp (lambda-list &rest lambda-body)
   "Takes in a variable holding a lambda list and another holding a lambda expression, returns a lambda function that uses them.
-  Example: a = (x y), b = (+ x y), (evaluate-lambda-exp a b) -> (lambda (x y) (+ x y).
+  Example: a = (x y), b = (+ x y), (evaluate-lambda-exp a b) -> (lambda (x y) (+ x y)).
   I'm not sure whether this actually works so it needs more testing."
   (eval `(lambda ,lambda-list ,@lambda-body)))
 
@@ -189,9 +207,12 @@ This is not a very powerful function. It's used mainly for tests on various netw
         (dotimes (output-num (length output))
           (setf (aref outputs input output-num) (elt output output-num)))))
     (list inputs outputs)))
-            
 
-; PART 3: DERIVATIVES (or: Functional Programming Hell)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+					; PART 3: DERIVATIVES (or: Functional Programming Hell)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defparameter *derivative-table* NIL)
 
@@ -213,6 +234,8 @@ This is not a very powerful function. It's used mainly for tests on various netw
   (add-derivatives
                    #'sin #'cos
                    #'cos #'nsin
+		   #'nsin #'ncos
+		   #'ncos #'sin
                    #'exp #'exp
                    #'log #'inv
                    #'inv #'nis
@@ -220,6 +243,7 @@ This is not a very powerful function. It's used mainly for tests on various netw
                    #'asin #'asinp
                    #'acos #'acosp
                    #'atan #'atanp
+		   #'tanh #'tanhp
                    ))
 
 (generate-derivative-table)
@@ -285,7 +309,11 @@ This is not a very powerful function. It's used mainly for tests on various netw
           (if (equal (elt func-cdr 0) '#'*) ; multiplication (works; kinda weird)
               (return-from get-derivative `(* zl ,(get-derivative replaced-func x zl-function) (inv ,replaced-func))))))))
 
-; PART 4: NODE OBJECT
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+					; PART 4: NODE OBJECT
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defclass node (standard-object)
                                         ; This is the node object. Every network is a list of layers, each layer is a list of nodes.
@@ -348,6 +376,14 @@ This is not a very powerful function. It's used mainly for tests on various netw
                                   (funcall (node-function node) prev-nodes (weights node) (outer-params node) zl))
         (funcall (node-function node) prev-nodes (weights node) (outer-params node)))))
 
+(defgeneric copy-node (node)
+  )
+
+(defmethod copy-node (node)
+  (let ((new-node (make-instance 'node :prev-node-count (prev-node-count node) :weights (weights node) :outer-params (outer-params node) :node-function (node-function node))))
+    (if (zl-function node) (setf (zl-function new-node) (zl-function node)))
+    new-node))
+
 (defgeneric access-weight (node prev-node-index weight-index)
   )
 
@@ -367,7 +403,11 @@ This is not a very powerful function. It's used mainly for tests on various netw
   "Generates a 2D weights array for a node using the aops library. Sets each weight to the result of a call to the (typically random) initializer function."
   (aops:generate initializer (list prev-node-count weights-per-prev-node)))
 
-; PART 5: NETWORK OPERATIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+					; PART 5: NETWORK OPERATIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun activate-network (network input-nodes)
   "Activates an entire network given a list of input nodes."
@@ -394,7 +434,15 @@ This is not a very powerful function. It's used mainly for tests on various netw
     (format t "~%LAYER ~a~%" layer)
     (dotimes (node (length (elt network layer)))
       (format t "~%Node ~a~%" node)
-      (print-node (elt (elt network layer) node)))))    
+      (print-node (elt (elt network layer) node)))))
+
+(defun copy-network (network)
+  "Copies a network. All nodes have the same values."
+  (let ((new-net))
+    (dolist (layer network new-net)
+      (let ((new-layer (make-array (length layer) :fill-pointer 0)))
+	(dotimes (node-number (length layer)) (vector-push (copy-node (elt layer node-number)) new-layer))
+	(setf new-net (append new-net (list new-layer)))))))
 
 (defun initialize-network-mono (sizes initializer node-function num-weights num-oparams)
   "Creates the network of nodes, sets every weight and bias according to the initializer.
@@ -551,6 +599,7 @@ while large batches will obviously take forever to train unless you use a wacky 
         (setf batch-counter 0 cost-sum 0)) ; reset the batch counter
       (let* ((datum (random dataset-size))
              (labelled-input (coerce (slice-2d-array labelled-inputs datum) 'list)) ; awful
+	     (message (if (> verbose 2) (print "Getting activation list...")))
              (network-alist (get-activation-list network labelled-input))
              (network-outputs (elt (last network-alist) 0)) ; probably not even a good fix this is where the actual training part happens
              (labelled-output (coerce (slice-2d-array labelled-outputs datum) 'list)))
